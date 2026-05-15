@@ -49,7 +49,7 @@ onmessage = async function(msg) {
 
       // Start keepalive *before* calling C++/WASM code
       
-      moduleObject._stop_keepalive_mainloop();
+      // moduleObject._stop_keepalive_mainloop();
 
       let resultVec = engineInstance.process(cppVec, width, height, channels);
 
@@ -90,7 +90,7 @@ onmessage = async function(msg) {
     // Log the error, post error message, and be sure to clean up runtime state
     console.error("WASM/WebGPU worker error:", err);
     try {
-      moduleObject?._start_keepalive_mainloop();
+      // moduleObject?._start_keepalive_mainloop();
     } catch (e) {}
     postMessage({ requestType: "error", error: err && err.toString ? err.toString() : String(err) });
   }
