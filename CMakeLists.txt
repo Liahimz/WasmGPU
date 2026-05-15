@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.13)
 project(dummy_engine_wasm)
 
 set(CMAKE_CXX_STANDARD 17)
+set(WASM_GPU_BUILD_MODE "cpp-webgpu" CACHE STRING "Build mode: cpp-webgpu, js-webgpu, or dummy")
+set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu js-webgpu dummy)
 
 set(TBB_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/tbb)
 include_directories(${TBB_ROOT}/include)
@@ -30,8 +32,23 @@ set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
 include_directories(include)
 
+set(WASM_GPU_ENGINE_SOURCE src/wasm_gpu_engine.cpp)
+set(WASM_GPU_ENGINE_DEFINE BUILD_WASM_WEBGPU_ENGINE)
+
+if(WASM_GPU_BUILD_MODE STREQUAL "js-webgpu")
+    set(WASM_GPU_ENGINE_SOURCE src/gpu_engine.cpp)
+    set(WASM_GPU_ENGINE_DEFINE BUILD_JS_WEBGPU_ENGINE)
+elseif(WASM_GPU_BUILD_MODE STREQUAL "dummy")
+    set(WASM_GPU_ENGINE_SOURCE src/dummy_engine.cpp)
+    set(WASM_GPU_ENGINE_DEFINE BUILD_DUMMY_ENGINE)
+elseif(NOT WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu")
+    message(FATAL_ERROR "Unknown WASM_GPU_BUILD_MODE='${WASM_GPU_BUILD_MODE}'. Use cpp-webgpu, js-webgpu, or dummy.")
+endif()
+
+message(STATUS "WASM GPU build mode: ${WASM_GPU_BUILD_MODE}")
+
 add_executable(wasm_gpu
-    src/gpu_engine.cpp
+    ${WASM_GPU_ENGINE_SOURCE}
     src/bindings.cpp
     src/parallel_tools.cpp
 )
@@ -57,6 +74,7 @@ add_executable(wasm_gpu
 target_link_libraries(wasm_gpu PRIVATE ${TBB_LIB_DIR}/libtbb.a embind)
 
 target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
+target_compile_definitions(wasm_gpu PRIVATE ${WASM_GPU_ENGINE_DEFINE})
 
 set_target_properties(wasm_gpu PROPERTIES
     LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -sENVIRONMENT=worker -sPTHREAD_POOL_SIZE=4 -pthread -lembind -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=PThread -sASYNCIFY -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_keepalive_mainloop,_stop_keepalive_mainloop"

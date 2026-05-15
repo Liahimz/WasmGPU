@@ -1,7 +1,14 @@
 // bindings.cpp
 #include <emscripten/bind.h>
-// #include "dummy_engine.h"
+
+#if defined(BUILD_DUMMY_ENGINE)
+#include "dummy_engine.h"
+#elif defined(BUILD_WASM_WEBGPU_ENGINE)
+#include "wasm_gpu_engine.h"
+#else
 #include "gpu_engine.h"
+#endif
+
 using namespace emscripten;
 
 EMSCRIPTEN_BINDINGS(my_dummy_engine) {
@@ -9,12 +16,28 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .field("image", &ProcessResult::image)
         .field("width", &ProcessResult::width)
         .field("height", &ProcessResult::height);
+#if defined(BUILD_DUMMY_ENGINE)
+    class_<DummyEngine>("DummyEngine")
+        .constructor<>()
+        .function("configure", &DummyEngine::configure)
+        .function("process", &DummyEngine::process)
+        ;
+#elif defined(BUILD_WASM_WEBGPU_ENGINE)
+    class_<WasmGpuEngine>("GpuEngine")
+        .constructor<>()
+        .function("configure", &WasmGpuEngine::configure)
+        .function("process", &WasmGpuEngine::process)
+        .function("argmax", &WasmGpuEngine::argmax)
+        ;
+#else
     class_<GpuEngine>("GpuEngine")
         .constructor<>()
         .function("configure", &GpuEngine::configure)
         .function("process", &GpuEngine::process)
         .function("argmax", &GpuEngine::argmax)
         ;
+#endif
+
     register_vector<uint8_t>("Uint8Vector");
     register_vector<float>("FloatVector");
 }

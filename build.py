@@ -2,17 +2,17 @@ import os
 import shutil
 import subprocess
 import sys
+import argparse
 
 # Settings
 BUILD_DIR = "build"
-SRC_FILES = [
-    "samples/index.html",
-    "samples/app.js",
-    "samples/worker.js",
-    "samples/serve.json",
-]
 WASM_JS = "wasm_gpu.js"
 WASM_BIN = "wasm_gpu.wasm"
+BUILD_MODES = {
+    "cpp-webgpu": "samples/CppWebGpu",
+    "js-webgpu": "samples/JsWebGpu",
+    "dummy": "samples/Dummy",
+}
 
 TBB_DIR = "thirdparty/tbb"
 TBB_BUILD = os.path.join(TBB_DIR, "build-emscripten")
@@ -59,8 +59,23 @@ def check_and_build_tbb():
     run_cmd(["emmake", "make", "-j", "8"], cwd=TBB_BUILD)
     print("TBB build complete.\n")      
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Build the WasmGPU demo.")
+    parser.add_argument(
+        "--mode",
+        choices=BUILD_MODES.keys(),
+        default="cpp-webgpu",
+        help="Build mode. Default: cpp-webgpu.",
+    )
+    return parser.parse_args()
+
 
 def main():
+    args = parse_args()
+    sample_dir = BUILD_MODES[args.mode]
+    print(f"Build mode: {args.mode}")
+    print(f"Sample dir: {sample_dir}")
+
     #build tbb for emiscripten
     check_and_build_tbb()
     
@@ -71,13 +86,13 @@ def main():
 
     # Build with emcmake/cmake
     # Build out-of-source in a 'cmake-build' directory
-    CMAKE_BUILD = "cmake-build"
+    CMAKE_BUILD = f"cmake-build-{args.mode}"
     if os.path.exists(CMAKE_BUILD):
         shutil.rmtree(CMAKE_BUILD)
     os.makedirs(CMAKE_BUILD)
 
     # Configure and build with Emscripten
-    run_cmd(["emcmake", "cmake", ".."], cwd=CMAKE_BUILD)
+    run_cmd(["emcmake", "cmake", "..", f"-DWASM_GPU_BUILD_MODE={args.mode}"], cwd=CMAKE_BUILD)
     run_cmd(["cmake", "--build", ".", "--config", "Release"], cwd=CMAKE_BUILD)
 
     # Move WASM outputs
@@ -90,19 +105,21 @@ def main():
     shutil.copy2(wasm_js_path, os.path.join(BUILD_DIR, WASM_JS))
     shutil.copy2(wasm_bin_path, os.path.join(BUILD_DIR, WASM_BIN))
 
-    # Copy JS, HTML, and serve.json files
-    SAMPLES_DIR = "samples"
-    if os.path.exists(SAMPLES_DIR):
-        for item in os.listdir(SAMPLES_DIR):
-            s = os.path.join(SAMPLES_DIR, item)
+    # Copy selected sample files
+    if os.path.exists(sample_dir):
+        for item in os.listdir(sample_dir):
+            s = os.path.join(sample_dir, item)
             d = os.path.join(BUILD_DIR, item)
             if os.path.isdir(s):
                 shutil.copytree(s, d)
             else:
                 shutil.copy2(s, d)
+    else:
+        print(f"Build failed: Missing sample directory {sample_dir}")
+        sys.exit(1)
 
     SHADERS_DIR = "shaders"
-    if os.path.exists(SHADERS_DIR):
+    if args.mode in ("cpp-webgpu", "js-webgpu") and os.path.exists(SHADERS_DIR):
         shutil.copytree(SHADERS_DIR, os.path.join(BUILD_DIR, SHADERS_DIR))
 
     print("\n✅ Build complete. To serve, run:")
