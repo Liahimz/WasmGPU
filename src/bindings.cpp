@@ -29,6 +29,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("configure", &WasmGpuEngine::configure)
         .function("process", &WasmGpuEngine::process, async())
         .function("processCpu", &WasmGpuEngine::processCpu)
+        .function("benchmarkCpuLarge", &WasmGpuEngine::benchmarkCpuLarge)
+        .function("benchmarkGpuLarge", &WasmGpuEngine::benchmarkGpuLarge, async())
         .function("argmax", &WasmGpuEngine::argmax)
         .function("webgpuReady", &WasmGpuEngine::webgpuReady)
         .function("inferencePending", &WasmGpuEngine::inferencePending)

@@ -18,6 +18,8 @@ public:
     void configure(const network::TinyLenetWeights* weights);
     bool ready() const;
     int infer(const std::vector<uint8_t>& image);
+    void prepareSyntheticLarge();
+    int benchmarkSyntheticLarge();
     bool inferencePending() const;
     int latestPrediction() const;
 
@@ -26,6 +28,8 @@ private:
     bool webgpu_requested_ = false;
     bool webgpu_ready_ = false;
     bool network_ready_ = false;
+    bool large_network_ready_ = false;
+    bool timestamp_query_enabled_ = false;
     bool inference_pending_ = false;
     int latest_prediction_ = -1;
 
@@ -51,10 +55,38 @@ private:
     WGpuBuffer linear_bias_buffer_ = 0;
     WGpuBuffer logits_buffer_ = 0;
     WGpuBuffer readback_buffer_ = 0;
+    WGpuQuerySet timestamp_query_set_ = 0;
+    WGpuBuffer timestamp_buffer_ = 0;
+    WGpuBuffer timestamp_readback_buffer_ = 0;
+    WGpuComputePipeline large_conv_pipeline_ = 0;
+    WGpuComputePipeline large_linear_partial_pipeline_ = 0;
+    WGpuComputePipeline large_linear_reduce_pipeline_ = 0;
+    WGpuBindGroupLayout large_conv_bind_group_layout_ = 0;
+    WGpuBindGroupLayout large_linear_partial_bind_group_layout_ = 0;
+    WGpuBindGroupLayout large_linear_reduce_bind_group_layout_ = 0;
+    WGpuPipelineLayout large_conv_pipeline_layout_ = 0;
+    WGpuPipelineLayout large_linear_partial_pipeline_layout_ = 0;
+    WGpuPipelineLayout large_linear_reduce_pipeline_layout_ = 0;
+    WGpuBindGroup large_conv_bind_group_ = 0;
+    WGpuBindGroup large_linear_partial_bind_group_ = 0;
+    WGpuBindGroup large_linear_reduce_bind_group_ = 0;
+    WGpuBuffer large_input_buffer_ = 0;
+    WGpuBuffer large_conv_weights_buffer_ = 0;
+    WGpuBuffer large_conv_bias_buffer_ = 0;
+    WGpuBuffer large_conv_output_buffer_ = 0;
+    WGpuBuffer large_linear_weights_buffer_ = 0;
+    WGpuBuffer large_linear_bias_buffer_ = 0;
+    WGpuBuffer large_partial_sums_buffer_ = 0;
+    WGpuBuffer large_logits_buffer_ = 0;
+    WGpuBuffer large_readback_buffer_ = 0;
+    WGpuQuerySet large_timestamp_query_set_ = 0;
+    WGpuBuffer large_timestamp_buffer_ = 0;
+    WGpuBuffer large_timestamp_readback_buffer_ = 0;
 
     static void onAdapter(WGpuAdapter adapter, void* user_data);
     static void onDevice(WGpuDevice device, void* user_data);
     void createNetworkResources();
+    void createLargeNetworkResources();
     WGpuBuffer createBuffer(std::size_t size, WGPU_BUFFER_USAGE_FLAGS usage) const;
 #endif
 };

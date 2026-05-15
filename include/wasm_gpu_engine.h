@@ -24,6 +24,8 @@ public:
     // Accepts grayscale image (flat vector), width, height
     ProcessResult process(const std::vector<uint8_t>& data, int width, int height, int channels);
     ProcessResult processCpu(const std::vector<uint8_t>& data, int width, int height, int channels, int mode);
+    int benchmarkCpuLarge(int mode);
+    int benchmarkGpuLarge();
 
     int argmax(const std::vector<float>& data);
     bool webgpuReady() const;

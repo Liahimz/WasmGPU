@@ -23,6 +23,17 @@ constexpr int ConvPlaneValues = ConvWidth * ConvHeight;
 constexpr int ConvValues = ConvPlaneValues * ConvChannels;
 constexpr int LogitValues = 10;
 
+constexpr int LargeInputWidth = 1000;
+constexpr int LargeInputHeight = 500;
+constexpr int LargeKernelWidth = 5;
+constexpr int LargeKernelHeight = 3;
+constexpr int LargeChannels = 4;
+constexpr int LargeConvWidth = LargeInputWidth - LargeKernelWidth + 1;
+constexpr int LargeConvHeight = LargeInputHeight - LargeKernelHeight + 1;
+constexpr int LargeInputValues = LargeInputWidth * LargeInputHeight;
+constexpr int LargeConvPlaneValues = LargeConvWidth * LargeConvHeight;
+constexpr int LargeConvValues = LargeConvPlaneValues * LargeChannels;
+
 float dotProductScalar(const float* left, const float* right, int count) {
     float sum = 0.0f;
     for (int i = 0; i < count; ++i) {
@@ -157,6 +168,129 @@ int argmax(const std::array<float, LogitValues>& logits) {
     return result;
 }
 
+float nextWeight(uint32_t& state, float scale) {
+    state = state * 1664525u + 1013904223u;
+    const float normalized = static_cast<float>((state >> 8) & 0x00ffffffu) / 16777215.0f;
+    return (normalized * 2.0f - 1.0f) * scale;
+}
+
+struct LargeSyntheticNetwork {
+    std::vector<float> input;
+    std::vector<float> conv_weights;
+    std::vector<float> conv_bias;
+    std::vector<float> linear_weights;
+    std::vector<float> linear_bias;
+
+    LargeSyntheticNetwork()
+        : input(LargeInputValues),
+          conv_weights(LargeChannels * LargeKernelWidth * LargeKernelHeight),
+          conv_bias(LargeChannels),
+          linear_weights(LogitValues * LargeConvValues),
+          linear_bias(LogitValues) {
+        uint32_t state = 0x12345678u;
+        for (float& value : input) {
+            value = nextWeight(state, 1.0f);
+        }
+        for (float& value : conv_weights) {
+            value = nextWeight(state, 0.05f);
+        }
+        for (float& value : conv_bias) {
+            value = nextWeight(state, 0.01f);
+        }
+        for (float& value : linear_weights) {
+            value = nextWeight(state, 0.005f);
+        }
+        for (float& value : linear_bias) {
+            value = nextWeight(state, 0.01f);
+        }
+    }
+};
+
+const LargeSyntheticNetwork& largeSyntheticNetwork() {
+    static const LargeSyntheticNetwork network;
+    return network;
+}
+
+void computeLargeConvChannel(
+    const LargeSyntheticNetwork& network,
+    float* conv_output,
+    int channel
+) {
+    const int weight_offset = channel * LargeKernelWidth * LargeKernelHeight;
+    const int output_offset = channel * LargeConvPlaneValues;
+
+    for (int y = 0; y < LargeConvHeight; ++y) {
+        for (int x = 0; x < LargeConvWidth; ++x) {
+            float sum = network.conv_bias[channel];
+            for (int ky = 0; ky < LargeKernelHeight; ++ky) {
+                for (int kx = 0; kx < LargeKernelWidth; ++kx) {
+                    const int input_index = (y + ky) * LargeInputWidth + (x + kx);
+                    const int weight_index = weight_offset + ky * LargeKernelWidth + kx;
+                    sum += network.input[input_index] * network.conv_weights[weight_index];
+                }
+            }
+            conv_output[output_offset + y * LargeConvWidth + x] = std::max(sum, 0.0f);
+        }
+    }
+}
+
+struct LargeConvThreadArgs {
+    const LargeSyntheticNetwork* network = nullptr;
+    float* conv_output = nullptr;
+    int channel = 0;
+};
+
+void* largeConvThreadMain(void* user_data) {
+    auto* args = static_cast<LargeConvThreadArgs*>(user_data);
+    computeLargeConvChannel(*args->network, args->conv_output, args->channel);
+    return nullptr;
+}
+
+void computeLargeConvScalar(const LargeSyntheticNetwork& network, float* conv_output) {
+    for (int channel = 0; channel < LargeChannels; ++channel) {
+        computeLargeConvChannel(network, conv_output, channel);
+    }
+}
+
+void computeLargeConvThreaded(const LargeSyntheticNetwork& network, float* conv_output) {
+    std::array<pthread_t, LargeChannels> threads{};
+    std::array<LargeConvThreadArgs, LargeChannels> args{};
+    std::array<bool, LargeChannels> started{};
+
+    for (int channel = 0; channel < LargeChannels; ++channel) {
+        args[channel].network = &network;
+        args[channel].conv_output = conv_output;
+        args[channel].channel = channel;
+
+        started[channel] = pthread_create(&threads[channel], nullptr, largeConvThreadMain, &args[channel]) == 0;
+        if (!started[channel]) {
+            computeLargeConvChannel(network, conv_output, channel);
+        }
+    }
+
+    for (int channel = 0; channel < LargeChannels; ++channel) {
+        if (started[channel]) {
+            pthread_join(threads[channel], nullptr);
+        }
+    }
+}
+
+std::array<float, LogitValues> computeLargeLinear(
+    const LargeSyntheticNetwork& network,
+    const float* conv_output,
+    bool use_simd
+) {
+    std::array<float, LogitValues> logits{};
+    for (int cls = 0; cls < LogitValues; ++cls) {
+        const float* linear_weights = network.linear_weights.data() + cls * LargeConvValues;
+        const float dot = use_simd
+            ? dotProductSimd(conv_output, linear_weights, LargeConvValues)
+            : dotProductScalar(conv_output, linear_weights, LargeConvValues);
+        logits[cls] = network.linear_bias[cls] + dot;
+    }
+    return logits;
+}
+
 CppExecutorMode normalizeMode(CppExecutorMode mode) {
     if (mode == CppExecutorMode::Scalar ||
         mode == CppExecutorMode::Simd ||
@@ -197,5 +331,26 @@ int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) 
 
     const bool use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
     const std::array<float, LogitValues> logits = computeLinear(conv_output.data(), *weights_, use_simd);
+    return argmax(logits);
+}
+
+void CppExecutor::prepareSyntheticLarge() const {
+    (void)largeSyntheticNetwork();
+}
+
+int CppExecutor::inferSyntheticLarge(CppExecutorMode mode) const {
+    mode = normalizeMode(mode);
+
+    const LargeSyntheticNetwork& network = largeSyntheticNetwork();
+    std::vector<float> conv_output(LargeConvValues);
+
+    if (mode == CppExecutorMode::SimdThreads) {
+        computeLargeConvThreaded(network, conv_output.data());
+    } else {
+        computeLargeConvScalar(network, conv_output.data());
+    }
+
+    const bool use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
+    const std::array<float, LogitValues> logits = computeLargeLinear(network, conv_output.data(), use_simd);
     return argmax(logits);
 }

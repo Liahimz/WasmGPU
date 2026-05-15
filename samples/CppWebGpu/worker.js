@@ -44,6 +44,12 @@ onmessage = async function(msg) {
         simd: cpuSimdResult.prediction,
         simdThreads: cpuSimdThreadsResult.prediction,
       };
+      const largeGpuPrediction = await engineInstance.benchmarkGpuLarge();
+      const largeCpuPredictions = {
+        scalar: engineInstance.benchmarkCpuLarge(0),
+        simd: engineInstance.benchmarkCpuLarge(1),
+        simdThreads: engineInstance.benchmarkCpuLarge(2),
+      };
 
       const outArr = [];
       for (let i = 0; i < resultVec.image.size(); ++i) {
@@ -55,6 +61,8 @@ onmessage = async function(msg) {
       console.log("C++ WebGPU ready:", engineInstance.webgpuReady());
       console.log("GPU prediction:", prediction);
       console.log("CPU predictions:", cpuPredictions);
+      console.log("Synthetic large CPU predictions:", largeCpuPredictions);
+      console.log("Synthetic large GPU prediction:", largeGpuPrediction);
 
       cppVec.delete();
 
@@ -65,6 +73,8 @@ onmessage = async function(msg) {
         height: resultVec.height,
         prediction,
         cpuPredictions,
+        largeCpuPredictions,
+        largeGpuPrediction,
         webgpuReady: engineInstance.webgpuReady(),
       }, [outImage.buffer]);
     }

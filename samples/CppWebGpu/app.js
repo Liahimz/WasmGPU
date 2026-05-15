@@ -84,9 +84,15 @@ worker.onmessage = function(e) {
     if (e.data.cpuPredictions) {
       console.log("CPU predictions:", e.data.cpuPredictions);
     }
+    if (e.data.largeCpuPredictions) {
+      console.log("Synthetic large CPU predictions:", e.data.largeCpuPredictions);
+    }
+    if (e.data.largeGpuPrediction !== undefined) {
+      console.log("Synthetic large GPU prediction:", e.data.largeGpuPrediction);
+    }
     console.log("C++ WebGPU ready:", e.data.webgpuReady);
     
-    let { outImage, width, height, prediction, cpuPredictions, webgpuReady } = e.data;
+    let { outImage, width, height, prediction, cpuPredictions, largeCpuPredictions, largeGpuPrediction, webgpuReady } = e.data;
     // width = 400;
     // height = outImage.length / width;;
     let canvas = document.createElement("canvas");
@@ -115,6 +121,17 @@ worker.onmessage = function(e) {
       cpuPredictionText.textContent =
         `CPU scalar/simd/simd_threads: ${cpuPredictions.scalar} / ${cpuPredictions.simd} / ${cpuPredictions.simdThreads}`;
       outputDiv.appendChild(cpuPredictionText);
+    }
+    if (largeCpuPredictions) {
+      let largePredictionText = document.createElement("div");
+      largePredictionText.textContent =
+        `Large CPU scalar/simd/simd_threads: ${largeCpuPredictions.scalar} / ${largeCpuPredictions.simd} / ${largeCpuPredictions.simdThreads}`;
+      outputDiv.appendChild(largePredictionText);
+    }
+    if (largeGpuPrediction !== undefined) {
+      let largeGpuPredictionText = document.createElement("div");
+      largeGpuPredictionText.textContent = `Large GPU: ${largeGpuPrediction}`;
+      outputDiv.appendChild(largeGpuPredictionText);
     }
     outputDiv.appendChild(canvas);
   } else if (e.data.requestType === "error") {

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <iostream>
 #include <limits>
 
@@ -14,6 +15,20 @@ namespace {
 constexpr std::size_t INPUT_VALUES = 28 * 28;
 constexpr std::size_t CONV_VALUES = 26 * 26 * 4;
 constexpr std::size_t LOGIT_VALUES = 10;
+constexpr std::size_t LARGE_INPUT_VALUES = 1000 * 500;
+constexpr std::size_t LARGE_CONV_VALUES = 996 * 498 * 4;
+constexpr std::size_t LARGE_CONV_WEIGHT_VALUES = 4 * 5 * 3;
+constexpr std::size_t LARGE_LINEAR_WEIGHT_VALUES = LOGIT_VALUES * LARGE_CONV_VALUES;
+constexpr std::size_t LARGE_PARTIAL_CHUNKS = 512;
+constexpr std::size_t LARGE_PARTIAL_VALUES = LOGIT_VALUES * LARGE_PARTIAL_CHUNKS;
+constexpr std::size_t TINY_TIMESTAMP_VALUES = 4;
+constexpr std::size_t LARGE_TIMESTAMP_VALUES = 6;
+
+using Clock = std::chrono::high_resolution_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 int argmax(const std::array<float, LOGIT_VALUES>& logits) {
     int result = -1;
@@ -45,6 +60,32 @@ WGpuBindGroupEntry bufferEntry(uint32_t binding, WGpuBuffer buffer, uint64_t siz
     return entry;
 }
 
+float nextWeight(uint32_t& state, float scale) {
+    state = state * 1664525u + 1013904223u;
+    const float normalized = static_cast<float>((state >> 8) & 0x00ffffffu) / 16777215.0f;
+    return (normalized * 2.0f - 1.0f) * scale;
+}
+
+std::vector<float> makeSyntheticValues(std::size_t count, uint32_t& state, float scale) {
+    std::vector<float> values(count);
+    for (float& value : values) {
+        value = nextWeight(state, scale);
+    }
+    return values;
+}
+
+WGpuComputePassDescriptor timestampPassDescriptor(WGpuQuerySet query_set, int begin_index, int end_index) {
+    WGpuComputePassDescriptor desc = WGPU_COMPUTE_PASS_DESCRIPTOR_DEFAULT_INITIALIZER;
+    desc.timestampWrites.querySet = query_set;
+    desc.timestampWrites.beginningOfPassWriteIndex = begin_index;
+    desc.timestampWrites.endOfPassWriteIndex = end_index;
+    return desc;
+}
+
+double timestampDeltaMs(uint64_t begin, uint64_t end) {
+    return static_cast<double>(end - begin) / 1000000.0;
+}
+
 } // namespace
 #endif
 
@@ -53,6 +94,33 @@ GpuExecutor::GpuExecutor() = default;
 GpuExecutor::~GpuExecutor() {
 #ifdef __EMSCRIPTEN__
     wgpu_object_destroy(readback_buffer_);
+    wgpu_object_destroy(timestamp_readback_buffer_);
+    wgpu_object_destroy(timestamp_buffer_);
+    wgpu_object_destroy(timestamp_query_set_);
+    wgpu_object_destroy(large_readback_buffer_);
+    wgpu_object_destroy(large_timestamp_readback_buffer_);
+    wgpu_object_destroy(large_timestamp_buffer_);
+    wgpu_object_destroy(large_timestamp_query_set_);
+    wgpu_object_destroy(large_logits_buffer_);
+    wgpu_object_destroy(large_partial_sums_buffer_);
+    wgpu_object_destroy(large_linear_bias_buffer_);
+    wgpu_object_destroy(large_linear_weights_buffer_);
+    wgpu_object_destroy(large_conv_output_buffer_);
+    wgpu_object_destroy(large_conv_bias_buffer_);
+    wgpu_object_destroy(large_conv_weights_buffer_);
+    wgpu_object_destroy(large_input_buffer_);
+    wgpu_object_destroy(large_linear_reduce_bind_group_);
+    wgpu_object_destroy(large_linear_partial_bind_group_);
+    wgpu_object_destroy(large_conv_bind_group_);
+    wgpu_object_destroy(large_linear_reduce_pipeline_layout_);
+    wgpu_object_destroy(large_linear_partial_pipeline_layout_);
+    wgpu_object_destroy(large_conv_pipeline_layout_);
+    wgpu_object_destroy(large_linear_reduce_bind_group_layout_);
+    wgpu_object_destroy(large_linear_partial_bind_group_layout_);
+    wgpu_object_destroy(large_conv_bind_group_layout_);
+    wgpu_object_destroy(large_linear_reduce_pipeline_);
+    wgpu_object_destroy(large_linear_partial_pipeline_);
+    wgpu_object_destroy(large_conv_pipeline_);
     wgpu_object_destroy(logits_buffer_);
     wgpu_object_destroy(linear_bias_buffer_);
     wgpu_object_destroy(linear_weights_buffer_);
@@ -71,6 +139,121 @@ GpuExecutor::~GpuExecutor() {
     wgpu_object_destroy(queue_);
     wgpu_object_destroy(device_);
     wgpu_object_destroy(adapter_);
+#endif
+}
+
+int GpuExecutor::benchmarkSyntheticLarge() {
+#ifdef __EMSCRIPTEN__
+    if (!webgpu_ready_) {
+        return -1;
+    }
+    createLargeNetworkResources();
+    if (!large_network_ready_) {
+        return -1;
+    }
+
+    const auto submit_start = Clock::now();
+    WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device_, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
+
+    WGpuComputePassDescriptor conv_pass_desc = timestampPassDescriptor(large_timestamp_query_set_, 0, 1);
+    WGpuComputePassEncoder conv_pass = wgpu_command_encoder_begin_compute_pass(
+        encoder,
+        timestamp_query_enabled_ ? &conv_pass_desc : 0
+    );
+    wgpu_compute_pass_encoder_set_pipeline(conv_pass, large_conv_pipeline_);
+    wgpu_compute_pass_encoder_set_bind_group(conv_pass, 0, large_conv_bind_group_, 0, 0);
+    wgpu_compute_pass_encoder_dispatch_workgroups(conv_pass, 63, 63, 4);
+    wgpu_compute_pass_encoder_end(conv_pass);
+
+    WGpuComputePassDescriptor linear_partial_pass_desc = timestampPassDescriptor(large_timestamp_query_set_, 2, 3);
+    WGpuComputePassEncoder linear_partial_pass = wgpu_command_encoder_begin_compute_pass(
+        encoder,
+        timestamp_query_enabled_ ? &linear_partial_pass_desc : 0
+    );
+    wgpu_compute_pass_encoder_set_pipeline(linear_partial_pass, large_linear_partial_pipeline_);
+    wgpu_compute_pass_encoder_set_bind_group(linear_partial_pass, 0, large_linear_partial_bind_group_, 0, 0);
+    wgpu_compute_pass_encoder_dispatch_workgroups(linear_partial_pass, 8, 10, 1);
+    wgpu_compute_pass_encoder_end(linear_partial_pass);
+
+    WGpuComputePassDescriptor linear_reduce_pass_desc = timestampPassDescriptor(large_timestamp_query_set_, 4, 5);
+    WGpuComputePassEncoder linear_reduce_pass = wgpu_command_encoder_begin_compute_pass(
+        encoder,
+        timestamp_query_enabled_ ? &linear_reduce_pass_desc : 0
+    );
+    wgpu_compute_pass_encoder_set_pipeline(linear_reduce_pass, large_linear_reduce_pipeline_);
+    wgpu_compute_pass_encoder_set_bind_group(linear_reduce_pass, 0, large_linear_reduce_bind_group_, 0, 0);
+    wgpu_compute_pass_encoder_dispatch_workgroups(linear_reduce_pass, 1, 1, 1);
+    wgpu_compute_pass_encoder_end(linear_reduce_pass);
+
+    wgpu_command_encoder_copy_buffer_to_buffer(
+        encoder,
+        large_logits_buffer_,
+        0,
+        large_readback_buffer_,
+        0,
+        LOGIT_VALUES * sizeof(float)
+    );
+    if (timestamp_query_enabled_) {
+        wgpu_command_encoder_resolve_query_set(
+            encoder,
+            large_timestamp_query_set_,
+            0,
+            LARGE_TIMESTAMP_VALUES,
+            large_timestamp_buffer_,
+            0
+        );
+        wgpu_command_encoder_copy_buffer_to_buffer(
+            encoder,
+            large_timestamp_buffer_,
+            0,
+            large_timestamp_readback_buffer_,
+            0,
+            LARGE_TIMESTAMP_VALUES * sizeof(uint64_t)
+        );
+    }
+
+    WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
+    wgpu_queue_submit_one_and_destroy(queue_, command_buffer);
+    const auto submit_end = Clock::now();
+
+    std::array<float, LOGIT_VALUES> logits{};
+    inference_pending_ = true;
+    const auto sync_start = Clock::now();
+    wgpu_buffer_map_sync(large_readback_buffer_, WGPU_MAP_MODE_READ, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_get_mapped_range(large_readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_read_mapped_range(large_readback_buffer_, 0, 0, logits.data(), LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_unmap(large_readback_buffer_);
+    std::array<uint64_t, LARGE_TIMESTAMP_VALUES> timestamps{};
+    if (timestamp_query_enabled_) {
+        wgpu_buffer_map_sync(large_timestamp_readback_buffer_, WGPU_MAP_MODE_READ, 0, LARGE_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_get_mapped_range(large_timestamp_readback_buffer_, 0, LARGE_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_read_mapped_range(large_timestamp_readback_buffer_, 0, 0, timestamps.data(), LARGE_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_unmap(large_timestamp_readback_buffer_);
+    }
+    const auto sync_end = Clock::now();
+
+    latest_prediction_ = argmax(logits);
+    inference_pending_ = false;
+    std::cout << "[timing] synthetic_gpu_large_detail"
+              << " encode_submit=" << elapsedMs(submit_start, submit_end)
+              << "ms sync_readback=" << elapsedMs(sync_start, sync_end)
+              << "ms";
+    if (timestamp_query_enabled_) {
+        const double conv_ms = timestampDeltaMs(timestamps[0], timestamps[1]);
+        const double partial_ms = timestampDeltaMs(timestamps[2], timestamps[3]);
+        const double reduce_ms = timestampDeltaMs(timestamps[4], timestamps[5]);
+        std::cout << " gpu_conv=" << conv_ms
+                  << "ms gpu_linear_partial=" << partial_ms
+                  << "ms gpu_linear_reduce=" << reduce_ms
+                  << "ms gpu_total=" << (conv_ms + partial_ms + reduce_ms)
+                  << "ms";
+    } else {
+        std::cout << " gpu_timestamp=unavailable";
+    }
+    std::cout << std::endl;
+    return latest_prediction_;
+#else
+    return -1;
 #endif
 }
 
@@ -96,15 +279,24 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
 
     wgpu_queue_write_buffer(queue_, input_buffer_, 0, input.data(), input.size() * sizeof(float));
 
+    const auto submit_start = Clock::now();
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device_, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
 
-    WGpuComputePassEncoder conv_pass = wgpu_command_encoder_begin_compute_pass(encoder, 0);
+    WGpuComputePassDescriptor conv_pass_desc = timestampPassDescriptor(timestamp_query_set_, 0, 1);
+    WGpuComputePassEncoder conv_pass = wgpu_command_encoder_begin_compute_pass(
+        encoder,
+        timestamp_query_enabled_ ? &conv_pass_desc : 0
+    );
     wgpu_compute_pass_encoder_set_pipeline(conv_pass, conv_pipeline_);
     wgpu_compute_pass_encoder_set_bind_group(conv_pass, 0, conv_bind_group_, 0, 0);
     wgpu_compute_pass_encoder_dispatch_workgroups(conv_pass, 4, 4, 4);
     wgpu_compute_pass_encoder_end(conv_pass);
 
-    WGpuComputePassEncoder linear_pass = wgpu_command_encoder_begin_compute_pass(encoder, 0);
+    WGpuComputePassDescriptor linear_pass_desc = timestampPassDescriptor(timestamp_query_set_, 2, 3);
+    WGpuComputePassEncoder linear_pass = wgpu_command_encoder_begin_compute_pass(
+        encoder,
+        timestamp_query_enabled_ ? &linear_pass_desc : 0
+    );
     wgpu_compute_pass_encoder_set_pipeline(linear_pass, linear_pipeline_);
     wgpu_compute_pass_encoder_set_bind_group(linear_pass, 0, linear_bind_group_, 0, 0);
     wgpu_compute_pass_encoder_dispatch_workgroups(linear_pass, 1, 1, 1);
@@ -118,23 +310,74 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
         0,
         LOGIT_VALUES * sizeof(float)
     );
+    if (timestamp_query_enabled_) {
+        wgpu_command_encoder_resolve_query_set(
+            encoder,
+            timestamp_query_set_,
+            0,
+            TINY_TIMESTAMP_VALUES,
+            timestamp_buffer_,
+            0
+        );
+        wgpu_command_encoder_copy_buffer_to_buffer(
+            encoder,
+            timestamp_buffer_,
+            0,
+            timestamp_readback_buffer_,
+            0,
+            TINY_TIMESTAMP_VALUES * sizeof(uint64_t)
+        );
+    }
 
     WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
     wgpu_queue_submit_one_and_destroy(queue_, command_buffer);
+    const auto submit_end = Clock::now();
 
     std::array<float, LOGIT_VALUES> logits{};
     inference_pending_ = true;
+    const auto sync_start = Clock::now();
     wgpu_buffer_map_sync(readback_buffer_, WGPU_MAP_MODE_READ, 0, LOGIT_VALUES * sizeof(float));
     wgpu_buffer_get_mapped_range(readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
     wgpu_buffer_read_mapped_range(readback_buffer_, 0, 0, logits.data(), LOGIT_VALUES * sizeof(float));
     wgpu_buffer_unmap(readback_buffer_);
+    std::array<uint64_t, TINY_TIMESTAMP_VALUES> timestamps{};
+    if (timestamp_query_enabled_) {
+        wgpu_buffer_map_sync(timestamp_readback_buffer_, WGPU_MAP_MODE_READ, 0, TINY_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_get_mapped_range(timestamp_readback_buffer_, 0, TINY_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_read_mapped_range(timestamp_readback_buffer_, 0, 0, timestamps.data(), TINY_TIMESTAMP_VALUES * sizeof(uint64_t));
+        wgpu_buffer_unmap(timestamp_readback_buffer_);
+    }
+    const auto sync_end = Clock::now();
 
     latest_prediction_ = argmax(logits);
     inference_pending_ = false;
+    std::cout << "[timing] gpu_detail"
+              << " encode_submit=" << elapsedMs(submit_start, submit_end)
+              << "ms sync_readback=" << elapsedMs(sync_start, sync_end)
+              << "ms";
+    if (timestamp_query_enabled_) {
+        const double conv_ms = timestampDeltaMs(timestamps[0], timestamps[1]);
+        const double linear_ms = timestampDeltaMs(timestamps[2], timestamps[3]);
+        std::cout << " gpu_conv=" << conv_ms
+                  << "ms gpu_linear=" << linear_ms
+                  << "ms gpu_total=" << (conv_ms + linear_ms)
+                  << "ms";
+    } else {
+        std::cout << " gpu_timestamp=unavailable";
+    }
+    std::cout << std::endl;
     return latest_prediction_;
 #else
     (void)image;
     return -1;
+#endif
+}
+
+void GpuExecutor::prepareSyntheticLarge() {
+#ifdef __EMSCRIPTEN__
+    if (webgpu_ready_) {
+        createLargeNetworkResources();
+    }
 #endif
 }
 
@@ -180,6 +423,9 @@ void GpuExecutor::onAdapter(WGpuAdapter adapter, void* user_data) {
     self->adapter_ = adapter;
 
     WGpuDeviceDescriptor device_desc = WGPU_DEVICE_DESCRIPTOR_DEFAULT_INITIALIZER;
+    if (wgpu_adapter_or_device_supports_feature(adapter, WGPU_FEATURE_TIMESTAMP_QUERY)) {
+        device_desc.requiredFeatures = WGPU_FEATURE_TIMESTAMP_QUERY;
+    }
     wgpu_adapter_request_device_async(adapter, &device_desc, &GpuExecutor::onDevice, self);
 }
 
@@ -192,8 +438,14 @@ void GpuExecutor::onDevice(WGpuDevice device, void* user_data) {
 
     self->device_ = device;
     self->queue_ = wgpu_device_get_queue(device);
+    self->timestamp_query_enabled_ = wgpu_adapter_or_device_supports_feature(device, WGPU_FEATURE_TIMESTAMP_QUERY);
     self->webgpu_ready_ = true;
     self->createNetworkResources();
+    if (self->timestamp_query_enabled_) {
+        std::cout << "wasm_webgpu timestamp-query ready" << std::endl;
+    } else {
+        std::cout << "wasm_webgpu timestamp-query unavailable" << std::endl;
+    }
     std::cout << "wasm_webgpu device ready" << std::endl;
 }
 
@@ -219,6 +471,7 @@ void GpuExecutor::createNetworkResources() {
     const uint64_t linear_weights_size = weights_->linear_weights.size() * sizeof(float);
     const uint64_t linear_bias_size = weights_->linear_bias.size() * sizeof(float);
     const uint64_t logits_size = LOGIT_VALUES * sizeof(float);
+    const uint64_t timestamp_size = TINY_TIMESTAMP_VALUES * sizeof(uint64_t);
 
     input_buffer_ = createBuffer(input_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
     conv_weights_buffer_ = createBuffer(conv_weights_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
@@ -228,6 +481,14 @@ void GpuExecutor::createNetworkResources() {
     linear_bias_buffer_ = createBuffer(linear_bias_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
     logits_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC);
     readback_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    if (timestamp_query_enabled_) {
+        WGpuQuerySetDescriptor timestamp_desc = {};
+        timestamp_desc.type = WGPU_QUERY_TYPE_TIMESTAMP;
+        timestamp_desc.count = TINY_TIMESTAMP_VALUES;
+        timestamp_query_set_ = wgpu_device_create_query_set(device_, &timestamp_desc);
+        timestamp_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_QUERY_RESOLVE | WGPU_BUFFER_USAGE_COPY_SRC);
+        timestamp_readback_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    }
 
     wgpu_queue_write_buffer(queue_, conv_weights_buffer_, 0, weights_->conv_weights.data(), conv_weights_size);
     wgpu_queue_write_buffer(queue_, conv_bias_buffer_, 0, weights_->conv_bias.data(), conv_bias_size);
@@ -287,6 +548,146 @@ void GpuExecutor::createNetworkResources() {
         std::cout << "wasm_webgpu tiny_lenet resources ready" << std::endl;
     } else {
         std::cerr << "Failed to create wasm_webgpu tiny_lenet resources" << std::endl;
+    }
+}
+
+void GpuExecutor::createLargeNetworkResources() {
+    if (large_network_ready_) {
+        return;
+    }
+    if (!device_ || !queue_) {
+        return;
+    }
+
+    const uint64_t input_size = LARGE_INPUT_VALUES * sizeof(float);
+    const uint64_t conv_weights_size = LARGE_CONV_WEIGHT_VALUES * sizeof(float);
+    const uint64_t conv_bias_size = 4 * sizeof(float);
+    const uint64_t conv_output_size = LARGE_CONV_VALUES * sizeof(float);
+    const uint64_t linear_weights_size = LARGE_LINEAR_WEIGHT_VALUES * sizeof(float);
+    const uint64_t linear_bias_size = LOGIT_VALUES * sizeof(float);
+    const uint64_t partial_sums_size = LARGE_PARTIAL_VALUES * sizeof(float);
+    const uint64_t logits_size = LOGIT_VALUES * sizeof(float);
+    const uint64_t timestamp_size = LARGE_TIMESTAMP_VALUES * sizeof(uint64_t);
+
+    large_input_buffer_ = createBuffer(input_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
+    large_conv_weights_buffer_ = createBuffer(conv_weights_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
+    large_conv_bias_buffer_ = createBuffer(conv_bias_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
+    large_conv_output_buffer_ = createBuffer(conv_output_size, WGPU_BUFFER_USAGE_STORAGE);
+    large_linear_weights_buffer_ = createBuffer(linear_weights_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
+    large_linear_bias_buffer_ = createBuffer(linear_bias_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST);
+    large_partial_sums_buffer_ = createBuffer(partial_sums_size, WGPU_BUFFER_USAGE_STORAGE);
+    large_logits_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC);
+    large_readback_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    if (timestamp_query_enabled_) {
+        WGpuQuerySetDescriptor timestamp_desc = {};
+        timestamp_desc.type = WGPU_QUERY_TYPE_TIMESTAMP;
+        timestamp_desc.count = LARGE_TIMESTAMP_VALUES;
+        large_timestamp_query_set_ = wgpu_device_create_query_set(device_, &timestamp_desc);
+        large_timestamp_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_QUERY_RESOLVE | WGPU_BUFFER_USAGE_COPY_SRC);
+        large_timestamp_readback_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    }
+
+    uint32_t state = 0x12345678u;
+    {
+        std::vector<float> values = makeSyntheticValues(LARGE_INPUT_VALUES, state, 1.0f);
+        wgpu_queue_write_buffer(queue_, large_input_buffer_, 0, values.data(), input_size);
+    }
+    {
+        std::vector<float> values = makeSyntheticValues(LARGE_CONV_WEIGHT_VALUES, state, 0.05f);
+        wgpu_queue_write_buffer(queue_, large_conv_weights_buffer_, 0, values.data(), conv_weights_size);
+    }
+    {
+        std::vector<float> values = makeSyntheticValues(4, state, 0.01f);
+        wgpu_queue_write_buffer(queue_, large_conv_bias_buffer_, 0, values.data(), conv_bias_size);
+    }
+    {
+        std::vector<float> values = makeSyntheticValues(LARGE_LINEAR_WEIGHT_VALUES, state, 0.005f);
+        wgpu_queue_write_buffer(queue_, large_linear_weights_buffer_, 0, values.data(), linear_weights_size);
+    }
+    {
+        std::vector<float> values = makeSyntheticValues(LOGIT_VALUES, state, 0.01f);
+        wgpu_queue_write_buffer(queue_, large_linear_bias_buffer_, 0, values.data(), linear_bias_size);
+    }
+
+    WGpuBindGroupLayoutEntry conv_layout_entries[4] = {
+        storageLayoutEntry(0, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, input_size),
+        storageLayoutEntry(1, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, conv_weights_size),
+        storageLayoutEntry(2, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, conv_bias_size),
+        storageLayoutEntry(3, WGPU_BUFFER_BINDING_TYPE_STORAGE, conv_output_size),
+    };
+    large_conv_bind_group_layout_ = wgpu_device_create_bind_group_layout(device_, conv_layout_entries, 4);
+    large_conv_pipeline_layout_ = wgpu_device_create_pipeline_layout(device_, &large_conv_bind_group_layout_, 1);
+
+    WGpuBindGroupLayoutEntry partial_layout_entries[3] = {
+        storageLayoutEntry(0, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, conv_output_size),
+        storageLayoutEntry(1, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, linear_weights_size),
+        storageLayoutEntry(2, WGPU_BUFFER_BINDING_TYPE_STORAGE, partial_sums_size),
+    };
+    large_linear_partial_bind_group_layout_ = wgpu_device_create_bind_group_layout(device_, partial_layout_entries, 3);
+    large_linear_partial_pipeline_layout_ = wgpu_device_create_pipeline_layout(device_, &large_linear_partial_bind_group_layout_, 1);
+
+    WGpuBindGroupLayoutEntry reduce_layout_entries[3] = {
+        storageLayoutEntry(0, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, partial_sums_size),
+        storageLayoutEntry(1, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, linear_bias_size),
+        storageLayoutEntry(2, WGPU_BUFFER_BINDING_TYPE_STORAGE, logits_size),
+    };
+    large_linear_reduce_bind_group_layout_ = wgpu_device_create_bind_group_layout(device_, reduce_layout_entries, 3);
+    large_linear_reduce_pipeline_layout_ = wgpu_device_create_pipeline_layout(device_, &large_linear_reduce_bind_group_layout_, 1);
+
+    WGpuShaderModuleDescriptor conv_shader_desc = {};
+    conv_shader_desc.code = internal::LARGE_CONV_RELU_WGSL;
+    WGpuShaderModule conv_shader = wgpu_device_create_shader_module(device_, &conv_shader_desc);
+
+    WGpuShaderModuleDescriptor partial_shader_desc = {};
+    partial_shader_desc.code = internal::LARGE_LINEAR_PARTIAL_WGSL;
+    WGpuShaderModule partial_shader = wgpu_device_create_shader_module(device_, &partial_shader_desc);
+
+    WGpuShaderModuleDescriptor reduce_shader_desc = {};
+    reduce_shader_desc.code = internal::LARGE_LINEAR_REDUCE_WGSL;
+    WGpuShaderModule reduce_shader = wgpu_device_create_shader_module(device_, &reduce_shader_desc);
+
+    large_conv_pipeline_ = wgpu_device_create_compute_pipeline(device_, conv_shader, "main", large_conv_pipeline_layout_, 0, 0);
+    large_linear_partial_pipeline_ = wgpu_device_create_compute_pipeline(device_, partial_shader, "main", large_linear_partial_pipeline_layout_, 0, 0);
+    large_linear_reduce_pipeline_ = wgpu_device_create_compute_pipeline(device_, reduce_shader, "main", large_linear_reduce_pipeline_layout_, 0, 0);
+
+    wgpu_object_destroy(conv_shader);
+    wgpu_object_destroy(partial_shader);
+    wgpu_object_destroy(reduce_shader);
+
+    WGpuBindGroupEntry conv_entries[4] = {
+        bufferEntry(0, large_input_buffer_, input_size),
+        bufferEntry(1, large_conv_weights_buffer_, conv_weights_size),
+        bufferEntry(2, large_conv_bias_buffer_, conv_bias_size),
+        bufferEntry(3, large_conv_output_buffer_, conv_output_size),
+    };
+    large_conv_bind_group_ = wgpu_device_create_bind_group(device_, large_conv_bind_group_layout_, conv_entries, 4);
+
+    WGpuBindGroupEntry partial_entries[3] = {
+        bufferEntry(0, large_conv_output_buffer_, conv_output_size),
+        bufferEntry(1, large_linear_weights_buffer_, linear_weights_size),
+        bufferEntry(2, large_partial_sums_buffer_, partial_sums_size),
+    };
+    large_linear_partial_bind_group_ = wgpu_device_create_bind_group(device_, large_linear_partial_bind_group_layout_, partial_entries, 3);
+
+    WGpuBindGroupEntry reduce_entries[3] = {
+        bufferEntry(0, large_partial_sums_buffer_, partial_sums_size),
+        bufferEntry(1, large_linear_bias_buffer_, linear_bias_size),
+        bufferEntry(2, large_logits_buffer_, logits_size),
+    };
+    large_linear_reduce_bind_group_ = wgpu_device_create_bind_group(device_, large_linear_reduce_bind_group_layout_, reduce_entries, 3);
+
+    large_network_ready_ =
+        large_conv_pipeline_ &&
+        large_linear_partial_pipeline_ &&
+        large_linear_reduce_pipeline_ &&
+        large_conv_bind_group_ &&
+        large_linear_partial_bind_group_ &&
+        large_linear_reduce_bind_group_;
+
+    if (large_network_ready_) {
+        std::cout << "wasm_webgpu synthetic large resources ready" << std::endl;
+    } else {
+        std::cerr << "Failed to create wasm_webgpu synthetic large resources" << std::endl;
     }
 }
 #endif

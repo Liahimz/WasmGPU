@@ -18,6 +18,8 @@ public:
     void configure(const network::TinyLenetWeights* weights);
     bool ready() const;
     int infer(const std::vector<uint8_t>& image, CppExecutorMode mode) const;
+    void prepareSyntheticLarge() const;
+    int inferSyntheticLarge(CppExecutorMode mode) const;
 
 private:
     const network::TinyLenetWeights* weights_ = nullptr;

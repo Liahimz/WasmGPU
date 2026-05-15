@@ -92,6 +92,36 @@ ProcessResult WasmGpuEngine::processCpu(
     return result;
 }
 
+int WasmGpuEngine::benchmarkCpuLarge(int mode) {
+    cpu_.prepareSyntheticLarge();
+
+    const auto inference_start = Clock::now();
+    const int prediction = cpu_.inferSyntheticLarge(static_cast<CppExecutorMode>(mode));
+    const auto inference_end = Clock::now();
+
+    std::cout << "[timing] synthetic_cpu_large mode=" << cpuModeName(mode)
+              << " input=1000x500 kernel=5x3"
+              << " inference=" << elapsedMs(inference_start, inference_end)
+              << "ms prediction=" << prediction
+              << std::endl;
+    return prediction;
+}
+
+int WasmGpuEngine::benchmarkGpuLarge() {
+    gpu_.prepareSyntheticLarge();
+
+    const auto inference_start = Clock::now();
+    const int prediction = gpu_.benchmarkSyntheticLarge();
+    const auto inference_end = Clock::now();
+
+    std::cout << "[timing] synthetic_gpu_large"
+              << " input=1000x500 kernel=5x3"
+              << " inference=" << elapsedMs(inference_start, inference_end)
+              << "ms prediction=" << prediction
+              << std::endl;
+    return prediction;
+}
+
 ProcessResult WasmGpuEngine::preprocess(
     const std::vector<uint8_t>& data,
     int width,
