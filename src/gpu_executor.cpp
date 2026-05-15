@@ -30,6 +30,10 @@ double elapsedMs(Clock::time_point start, Clock::time_point end) {
     return std::chrono::duration<double, std::milli>(end - start).count();
 }
 
+double nowMs() {
+    return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count();
+}
+
 int argmax(const std::array<float, LOGIT_VALUES>& logits) {
     int result = -1;
     float max = -std::numeric_limits<float>::infinity();
@@ -218,6 +222,20 @@ int GpuExecutor::benchmarkSyntheticLarge() {
 
     std::array<float, LOGIT_VALUES> logits{};
     inference_pending_ = true;
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+    pending_encode_submit_ms_ = elapsedMs(submit_start, submit_end);
+    pending_sync_start_ms_ = nowMs();
+    pending_kind_ = 2;
+    wgpu_buffer_map_async(
+        large_readback_buffer_,
+        &GpuExecutor::onLargeReadbackMapped,
+        this,
+        WGPU_MAP_MODE_READ,
+        0,
+        LOGIT_VALUES * sizeof(float)
+    );
+    return -1;
+#else
     const auto sync_start = Clock::now();
     wgpu_buffer_map_sync(large_readback_buffer_, WGPU_MAP_MODE_READ, 0, LOGIT_VALUES * sizeof(float));
     wgpu_buffer_get_mapped_range(large_readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
@@ -252,6 +270,7 @@ int GpuExecutor::benchmarkSyntheticLarge() {
     }
     std::cout << std::endl;
     return latest_prediction_;
+#endif
 #else
     return -1;
 #endif
@@ -335,6 +354,20 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
 
     std::array<float, LOGIT_VALUES> logits{};
     inference_pending_ = true;
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+    pending_encode_submit_ms_ = elapsedMs(submit_start, submit_end);
+    pending_sync_start_ms_ = nowMs();
+    pending_kind_ = 1;
+    wgpu_buffer_map_async(
+        readback_buffer_,
+        &GpuExecutor::onTinyReadbackMapped,
+        this,
+        WGPU_MAP_MODE_READ,
+        0,
+        LOGIT_VALUES * sizeof(float)
+    );
+    return -1;
+#else
     const auto sync_start = Clock::now();
     wgpu_buffer_map_sync(readback_buffer_, WGPU_MAP_MODE_READ, 0, LOGIT_VALUES * sizeof(float));
     wgpu_buffer_get_mapped_range(readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
@@ -367,6 +400,7 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     }
     std::cout << std::endl;
     return latest_prediction_;
+#endif
 #else
     (void)image;
     return -1;
@@ -413,6 +447,134 @@ void GpuExecutor::requestWebGpuDevice() {
 }
 
 #ifdef __EMSCRIPTEN__
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+void GpuExecutor::onTinyReadbackMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, double_int53_t, double_int53_t) {
+    auto* self = static_cast<GpuExecutor*>(user_data);
+    if (self) {
+        self->finishTinyAsyncReadback();
+    }
+}
+
+void GpuExecutor::onTinyTimestampMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, double_int53_t, double_int53_t) {
+    auto* self = static_cast<GpuExecutor*>(user_data);
+    if (self) {
+        self->finishTinyAsyncTimestamp();
+    }
+}
+
+void GpuExecutor::onLargeReadbackMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, double_int53_t, double_int53_t) {
+    auto* self = static_cast<GpuExecutor*>(user_data);
+    if (self) {
+        self->finishLargeAsyncReadback();
+    }
+}
+
+void GpuExecutor::onLargeTimestampMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, double_int53_t, double_int53_t) {
+    auto* self = static_cast<GpuExecutor*>(user_data);
+    if (self) {
+        self->finishLargeAsyncTimestamp();
+    }
+}
+
+void GpuExecutor::finishTinyAsyncReadback() {
+    std::array<float, LOGIT_VALUES> logits{};
+    wgpu_buffer_get_mapped_range(readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_read_mapped_range(readback_buffer_, 0, 0, logits.data(), LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_unmap(readback_buffer_);
+    latest_prediction_ = argmax(logits);
+
+    if (timestamp_query_enabled_) {
+        wgpu_buffer_map_async(
+            timestamp_readback_buffer_,
+            &GpuExecutor::onTinyTimestampMapped,
+            this,
+            WGPU_MAP_MODE_READ,
+            0,
+            TINY_TIMESTAMP_VALUES * sizeof(uint64_t)
+        );
+        return;
+    }
+
+    const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
+    std::cout << "[timing] gpu_detail"
+              << " encode_submit=" << pending_encode_submit_ms_
+              << "ms sync_readback=" << sync_readback_ms
+              << "ms gpu_timestamp=unavailable"
+              << std::endl;
+    inference_pending_ = false;
+}
+
+void GpuExecutor::finishTinyAsyncTimestamp() {
+    std::array<uint64_t, TINY_TIMESTAMP_VALUES> timestamps{};
+    wgpu_buffer_get_mapped_range(timestamp_readback_buffer_, 0, TINY_TIMESTAMP_VALUES * sizeof(uint64_t));
+    wgpu_buffer_read_mapped_range(timestamp_readback_buffer_, 0, 0, timestamps.data(), TINY_TIMESTAMP_VALUES * sizeof(uint64_t));
+    wgpu_buffer_unmap(timestamp_readback_buffer_);
+
+    const double conv_ms = timestampDeltaMs(timestamps[0], timestamps[1]);
+    const double linear_ms = timestampDeltaMs(timestamps[2], timestamps[3]);
+    const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
+    std::cout << "[timing] gpu_detail"
+              << " encode_submit=" << pending_encode_submit_ms_
+              << "ms sync_readback=" << sync_readback_ms
+              << "ms gpu_conv=" << conv_ms
+              << "ms gpu_linear=" << linear_ms
+              << "ms gpu_total=" << (conv_ms + linear_ms)
+              << "ms"
+              << std::endl;
+    inference_pending_ = false;
+}
+
+void GpuExecutor::finishLargeAsyncReadback() {
+    std::array<float, LOGIT_VALUES> logits{};
+    wgpu_buffer_get_mapped_range(large_readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_read_mapped_range(large_readback_buffer_, 0, 0, logits.data(), LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_unmap(large_readback_buffer_);
+    latest_prediction_ = argmax(logits);
+
+    if (timestamp_query_enabled_) {
+        wgpu_buffer_map_async(
+            large_timestamp_readback_buffer_,
+            &GpuExecutor::onLargeTimestampMapped,
+            this,
+            WGPU_MAP_MODE_READ,
+            0,
+            LARGE_TIMESTAMP_VALUES * sizeof(uint64_t)
+        );
+        return;
+    }
+
+    const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
+    std::cout << "[timing] synthetic_gpu_large_detail"
+              << " encode_submit=" << pending_encode_submit_ms_
+              << "ms sync_readback=" << sync_readback_ms
+              << "ms gpu_timestamp=unavailable"
+              << std::endl;
+    inference_pending_ = false;
+}
+
+void GpuExecutor::finishLargeAsyncTimestamp() {
+    std::array<uint64_t, LARGE_TIMESTAMP_VALUES> timestamps{};
+    wgpu_buffer_get_mapped_range(large_timestamp_readback_buffer_, 0, LARGE_TIMESTAMP_VALUES * sizeof(uint64_t));
+    wgpu_buffer_read_mapped_range(large_timestamp_readback_buffer_, 0, 0, timestamps.data(), LARGE_TIMESTAMP_VALUES * sizeof(uint64_t));
+    wgpu_buffer_unmap(large_timestamp_readback_buffer_);
+
+    const double conv_ms = timestampDeltaMs(timestamps[0], timestamps[1]);
+    const double partial_ms = timestampDeltaMs(timestamps[2], timestamps[3]);
+    const double reduce_ms = timestampDeltaMs(timestamps[4], timestamps[5]);
+    const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
+    std::cout << "[timing] synthetic_gpu_large_detail"
+              << " encode_submit=" << pending_encode_submit_ms_
+              << "ms sync_readback=" << sync_readback_ms
+              << "ms gpu_conv=" << conv_ms
+              << "ms gpu_linear_partial=" << partial_ms
+              << "ms gpu_linear_reduce=" << reduce_ms
+              << "ms gpu_total=" << (conv_ms + partial_ms + reduce_ms)
+              << "ms"
+              << std::endl;
+    inference_pending_ = false;
+}
+#endif
+
 void GpuExecutor::onAdapter(WGpuAdapter adapter, void* user_data) {
     auto* self = static_cast<GpuExecutor*>(user_data);
     if (!self || !adapter) {

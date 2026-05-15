@@ -59,11 +59,19 @@ ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width
     result.prediction = runNetwork(result.image);
     const auto inference_end = Clock::now();
 
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+    std::cout << "[timing] gpu_async_start preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+              << "ms submit=" << elapsedMs(inference_start, inference_end)
+              << "ms total_to_start=" << elapsedMs(total_start, inference_end)
+              << "ms"
+              << std::endl;
+#else
     std::cout << "[timing] gpu preprocess=" << elapsedMs(preprocess_start, preprocess_end)
               << "ms inference=" << elapsedMs(inference_start, inference_end)
               << "ms total=" << elapsedMs(total_start, inference_end)
               << "ms prediction=" << result.prediction
               << std::endl;
+#endif
     return result;
 }
 
@@ -114,11 +122,19 @@ int WasmGpuEngine::benchmarkGpuLarge() {
     const int prediction = gpu_.benchmarkSyntheticLarge();
     const auto inference_end = Clock::now();
 
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+    std::cout << "[timing] synthetic_gpu_large_async_start"
+              << " input=1000x500 kernel=5x3"
+              << " submit=" << elapsedMs(inference_start, inference_end)
+              << "ms"
+              << std::endl;
+#else
     std::cout << "[timing] synthetic_gpu_large"
               << " input=1000x500 kernel=5x3"
               << " inference=" << elapsedMs(inference_start, inference_end)
               << "ms prediction=" << prediction
               << std::endl;
+#endif
     return prediction;
 }
 

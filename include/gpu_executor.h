@@ -82,9 +82,22 @@ private:
     WGpuQuerySet large_timestamp_query_set_ = 0;
     WGpuBuffer large_timestamp_buffer_ = 0;
     WGpuBuffer large_timestamp_readback_buffer_ = 0;
+    double pending_encode_submit_ms_ = 0.0;
+    double pending_sync_start_ms_ = 0.0;
+    int pending_kind_ = 0;
 
     static void onAdapter(WGpuAdapter adapter, void* user_data);
     static void onDevice(WGpuDevice device, void* user_data);
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+    static void onTinyReadbackMapped(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size);
+    static void onTinyTimestampMapped(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size);
+    static void onLargeReadbackMapped(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size);
+    static void onLargeTimestampMapped(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size);
+    void finishTinyAsyncReadback();
+    void finishTinyAsyncTimestamp();
+    void finishLargeAsyncReadback();
+    void finishLargeAsyncTimestamp();
+#endif
     void createNetworkResources();
     void createLargeNetworkResources();
     WGpuBuffer createBuffer(std::size_t size, WGPU_BUFFER_USAGE_FLAGS usage) const;

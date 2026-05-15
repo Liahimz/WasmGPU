@@ -14,11 +14,12 @@ This is intentionally simple and experimental. The point is to make the data mov
 
 ## Build Modes
 
-The build script supports three modes:
+The build script supports four modes:
 
 | Mode | Meaning | Sample folder |
 | --- | --- | --- |
-| `cpp-webgpu` | Default mode. C++/WASM owns WebGPU through `thirdparty/wasm_webgpu`. | `samples/CppWebGpu` |
+| `cpp-webgpu` | Default desktop benchmark mode. C++/WASM owns WebGPU through `thirdparty/wasm_webgpu` and uses JSPI for sync-looking readback. | `samples/CppWebGpu` |
+| `cpp-webgpu-async` | Mobile-friendly C++ WebGPU mode. Uses async readback callbacks instead of JSPI / `WebAssembly.Suspending`. | `samples/CppWebGpuAsync` |
 | `js-webgpu` | Older path where JavaScript owns WebGPU and calls WASM for preprocessing/postprocessing. | `samples/JsWebGpu` |
 | `dummy` | Minimal CPU/sample mode for older experiments. | `samples/Dummy` |
 
@@ -32,6 +33,7 @@ Explicit mode:
 
 ```bash
 python3 ./build.py --mode cpp-webgpu
+python3 ./build.py --mode cpp-webgpu-async
 python3 ./build.py --mode js-webgpu
 python3 ./build.py --mode dummy
 ```
@@ -265,6 +267,13 @@ continue in C++
 
 It is useful for learning and benchmarking synchronization cost, but it is not the fastest way to structure a real GPU pipeline. For larger systems, it is usually better to keep intermediate tensors on the GPU and only read back final results when needed.
 
+For iPhone/mobile Safari, use:
+
+```bash
+python3 ./build.py --mode cpp-webgpu-async
+```
+
+That mode avoids JSPI and `WebAssembly.Suspending`. It starts GPU work from C++, returns to JavaScript, and completes through `wgpu_buffer_map_async` callbacks. The worker waits by polling `inferencePending()` and then reads `latestPrediction()`.
 
 ## Useful Commands
 
@@ -278,6 +287,12 @@ Build C++ WebGPU mode:
 
 ```bash
 python3 ./build.py --mode cpp-webgpu
+```
+
+Build C++ WebGPU async mode:
+
+```bash
+python3 ./build.py --mode cpp-webgpu-async
 ```
 
 Build JS WebGPU mode:

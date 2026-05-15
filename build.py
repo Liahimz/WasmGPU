@@ -10,6 +10,7 @@ WASM_JS = "wasm_gpu.js"
 WASM_BIN = "wasm_gpu.wasm"
 BUILD_MODES = {
     "cpp-webgpu": "samples/CppWebGpu",
+    "cpp-webgpu-async": "samples/CppWebGpuAsync",
     "js-webgpu": "samples/JsWebGpu",
     "dummy": "samples/Dummy",
 }
