@@ -83,7 +83,7 @@ add_custom_command(
 
 set(WASM_GPU_ENGINE_SOURCE src/wasm_gpu_engine.cpp)
 set(WASM_GPU_ENGINE_DEFINE BUILD_WASM_WEBGPU_ENGINE)
-set(WASM_GPU_EXTRA_SOURCES src/gpu_executor.cpp ${EMBEDDED_SHADER_HEADER})
+set(WASM_GPU_EXTRA_SOURCES src/gpu_executor.cpp src/cpp_executor.cpp ${EMBEDDED_SHADER_HEADER})
 set(WASM_GPU_USE_WASM_WEBGPU ON)
 
 if(WASM_GPU_BUILD_MODE STREQUAL "js-webgpu")
@@ -147,7 +147,9 @@ if(WASM_GPU_USE_WASM_WEBGPU)
     )
 
     if(EMSCRIPTEN)
+        target_compile_options(wasm_gpu PRIVATE -msimd128)
         target_link_options(wasm_gpu PRIVATE
+            -msimd128
             "--js-library=${WASM_WEBGPU_LIB_DIR}/lib_webgpu.js"
         )
     endif()

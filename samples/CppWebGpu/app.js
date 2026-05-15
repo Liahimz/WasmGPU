@@ -79,11 +79,14 @@ worker.onmessage = function(e) {
       console.log("WebGPU logits:", e.data.logits);
     }
     if (e.data.prediction !== undefined) {
-      console.log("Prediction:", e.data.prediction);
+      console.log("GPU prediction:", e.data.prediction);
+    }
+    if (e.data.cpuPredictions) {
+      console.log("CPU predictions:", e.data.cpuPredictions);
     }
     console.log("C++ WebGPU ready:", e.data.webgpuReady);
     
-    let { outImage, width, height, prediction, webgpuReady } = e.data;
+    let { outImage, width, height, prediction, cpuPredictions, webgpuReady } = e.data;
     // width = 400;
     // height = outImage.length / width;;
     let canvas = document.createElement("canvas");
@@ -104,8 +107,14 @@ worker.onmessage = function(e) {
     outputDiv.appendChild(statusText);
     if (prediction !== undefined) {
       let predictionText = document.createElement("div");
-      predictionText.textContent = `Prediction: ${prediction}`;
+      predictionText.textContent = `GPU prediction: ${prediction}`;
       outputDiv.appendChild(predictionText);
+    }
+    if (cpuPredictions) {
+      let cpuPredictionText = document.createElement("div");
+      cpuPredictionText.textContent =
+        `CPU scalar/simd/simd_threads: ${cpuPredictions.scalar} / ${cpuPredictions.simd} / ${cpuPredictions.simdThreads}`;
+      outputDiv.appendChild(cpuPredictionText);
     }
     outputDiv.appendChild(canvas);
   } else if (e.data.requestType === "error") {

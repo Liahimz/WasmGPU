@@ -2,8 +2,31 @@
 #include "image_proc.h"
 
 #include <algorithm>
+#include <chrono>
 #include <iostream>
 #include <limits>
+
+namespace {
+
+using Clock = std::chrono::high_resolution_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+const char* cpuModeName(int mode) {
+    switch (static_cast<CppExecutorMode>(mode)) {
+        case CppExecutorMode::Scalar:
+            return "scalar";
+        case CppExecutorMode::Simd:
+            return "simd";
+        case CppExecutorMode::SimdThreads:
+            return "simd_threads";
+    }
+    return "simd";
+}
+
+} // namespace
 
 WasmGpuEngine::WasmGpuEngine() {}
 WasmGpuEngine::~WasmGpuEngine() {}
@@ -23,9 +46,58 @@ void WasmGpuEngine::configure(int target_size_) {
     }
 
     gpu_.configure(&weights_);
+    cpu_.configure(&weights_);
 }
 
 ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width, int height, int channels) {
+    const auto total_start = Clock::now();
+    const auto preprocess_start = Clock::now();
+    ProcessResult result = preprocess(data, width, height, channels);
+    const auto preprocess_end = Clock::now();
+
+    const auto inference_start = Clock::now();
+    result.prediction = runNetwork(result.image);
+    const auto inference_end = Clock::now();
+
+    std::cout << "[timing] gpu preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+              << "ms inference=" << elapsedMs(inference_start, inference_end)
+              << "ms total=" << elapsedMs(total_start, inference_end)
+              << "ms prediction=" << result.prediction
+              << std::endl;
+    return result;
+}
+
+ProcessResult WasmGpuEngine::processCpu(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels,
+    int mode
+) {
+    const auto total_start = Clock::now();
+    const auto preprocess_start = Clock::now();
+    ProcessResult result = preprocess(data, width, height, channels);
+    const auto preprocess_end = Clock::now();
+
+    const auto inference_start = Clock::now();
+    result.prediction = cpu_.infer(result.image, static_cast<CppExecutorMode>(mode));
+    const auto inference_end = Clock::now();
+
+    std::cout << "[timing] cpu mode=" << cpuModeName(mode)
+              << " preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+              << "ms inference=" << elapsedMs(inference_start, inference_end)
+              << "ms total=" << elapsedMs(total_start, inference_end)
+              << "ms prediction=" << result.prediction
+              << std::endl;
+    return result;
+}
+
+ProcessResult WasmGpuEngine::preprocess(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels
+) const {
     int size = width * height;
     std::vector<uint8_t> gray(size);
     to_grayscale(data.data(), gray.data(), width, height, channels);
@@ -48,7 +120,6 @@ ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width
     result.image = std::move(gray_scaled);
     result.width = new_w;
     result.height = new_h;
-    result.prediction = runNetwork(result.image);
     return result;
 }
 
