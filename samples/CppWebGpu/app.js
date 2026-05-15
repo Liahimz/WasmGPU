@@ -75,10 +75,15 @@ worker.onmessage = function(e) {
   if (e.data.requestType === "result") {
     // Display processed image
     console.log("Grayscale output:", e.data.outImage.slice(0, 20));
-    console.log("WebGPU logits:", e.data.logits);
-    console.log("Prediction:", e.data.prediction);
+    if (e.data.logits) {
+      console.log("WebGPU logits:", e.data.logits);
+    }
+    if (e.data.prediction !== undefined) {
+      console.log("Prediction:", e.data.prediction);
+    }
+    console.log("C++ WebGPU ready:", e.data.webgpuReady);
     
-    let { outImage, width, height, prediction } = e.data;
+    let { outImage, width, height, prediction, webgpuReady } = e.data;
     // width = 400;
     // height = outImage.length / width;;
     let canvas = document.createElement("canvas");
@@ -94,9 +99,14 @@ worker.onmessage = function(e) {
     let imageData = new ImageData(out, width, height);
     ctx.putImageData(imageData, 0, 0);
     outputDiv.innerHTML = "";
-    let predictionText = document.createElement("div");
-    predictionText.textContent = `Prediction: ${prediction}`;
-    outputDiv.appendChild(predictionText);
+    let statusText = document.createElement("div");
+    statusText.textContent = `C++ WebGPU ready: ${webgpuReady}`;
+    outputDiv.appendChild(statusText);
+    if (prediction !== undefined) {
+      let predictionText = document.createElement("div");
+      predictionText.textContent = `Prediction: ${prediction}`;
+      outputDiv.appendChild(predictionText);
+    }
     outputDiv.appendChild(canvas);
   } else if (e.data.requestType === "error") {
     outputDiv.textContent = e.data.error;

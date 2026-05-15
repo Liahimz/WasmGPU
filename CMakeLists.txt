@@ -7,6 +7,8 @@ set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu js-webgpu dum
 
 set(TBB_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/tbb)
 include_directories(${TBB_ROOT}/include)
+set(WASM_WEBGPU_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/wasm_webgpu)
+set(WASM_WEBGPU_LIB_DIR ${WASM_WEBGPU_ROOT}/lib)
 # set(TBB_LIB_DIR ${CMAKE_SOURCE_DIR}/thirdparty/tbb/build-emscripten/clang_20.0_cxx11_32_release)
 # link_directories(${TBB_LIB_DIR})
 
@@ -34,13 +36,16 @@ include_directories(include)
 
 set(WASM_GPU_ENGINE_SOURCE src/wasm_gpu_engine.cpp)
 set(WASM_GPU_ENGINE_DEFINE BUILD_WASM_WEBGPU_ENGINE)
+set(WASM_GPU_USE_WASM_WEBGPU ON)
 
 if(WASM_GPU_BUILD_MODE STREQUAL "js-webgpu")
     set(WASM_GPU_ENGINE_SOURCE src/gpu_engine.cpp)
     set(WASM_GPU_ENGINE_DEFINE BUILD_JS_WEBGPU_ENGINE)
+    set(WASM_GPU_USE_WASM_WEBGPU OFF)
 elseif(WASM_GPU_BUILD_MODE STREQUAL "dummy")
     set(WASM_GPU_ENGINE_SOURCE src/dummy_engine.cpp)
     set(WASM_GPU_ENGINE_DEFINE BUILD_DUMMY_ENGINE)
+    set(WASM_GPU_USE_WASM_WEBGPU OFF)
 elseif(NOT WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu")
     message(FATAL_ERROR "Unknown WASM_GPU_BUILD_MODE='${WASM_GPU_BUILD_MODE}'. Use cpp-webgpu, js-webgpu, or dummy.")
 endif()
@@ -75,6 +80,24 @@ target_link_libraries(wasm_gpu PRIVATE ${TBB_LIB_DIR}/libtbb.a embind)
 
 target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
 target_compile_definitions(wasm_gpu PRIVATE ${WASM_GPU_ENGINE_DEFINE})
+
+if(WASM_GPU_USE_WASM_WEBGPU)
+    if(NOT EXISTS "${WASM_WEBGPU_LIB_DIR}/lib_webgpu.h")
+        message(FATAL_ERROR "cpp-webgpu mode requires wasm_webgpu at ${WASM_WEBGPU_ROOT}")
+    endif()
+
+    target_include_directories(wasm_gpu PRIVATE ${WASM_WEBGPU_LIB_DIR})
+    target_sources(wasm_gpu PRIVATE
+        ${WASM_WEBGPU_LIB_DIR}/lib_webgpu.cpp
+        ${WASM_WEBGPU_LIB_DIR}/lib_webgpu_cpp11.cpp
+    )
+
+    if(EMSCRIPTEN)
+        target_link_options(wasm_gpu PRIVATE
+            "--js-library=${WASM_WEBGPU_LIB_DIR}/lib_webgpu.js"
+        )
+    endif()
+endif()
 
 set_target_properties(wasm_gpu PROPERTIES
     LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -sENVIRONMENT=worker -sPTHREAD_POOL_SIZE=4 -pthread -lembind -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=PThread -sASYNCIFY -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_keepalive_mainloop,_stop_keepalive_mainloop"

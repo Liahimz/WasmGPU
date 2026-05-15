@@ -28,6 +28,7 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("configure", &WasmGpuEngine::configure)
         .function("process", &WasmGpuEngine::process)
         .function("argmax", &WasmGpuEngine::argmax)
+        .function("webgpuReady", &WasmGpuEngine::webgpuReady)
         ;
 #else
     class_<GpuEngine>("GpuEngine")
