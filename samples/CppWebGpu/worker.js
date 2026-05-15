@@ -16,20 +16,6 @@ let readyPromise = SmartIDEngine({
   return Module;
 });
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-async function waitForPrediction() {
-  for (let i = 0; i < 200; ++i) {
-    if (!engineInstance.inferencePending()) {
-      return engineInstance.latestPrediction();
-    }
-    await sleep(5);
-  }
-  return engineInstance.latestPrediction();
-}
-
 onmessage = async function(msg) {
   try {
     await readyPromise;
@@ -47,11 +33,8 @@ onmessage = async function(msg) {
         cppVec.push_back(arr[i]);
       }
 
-      const resultVec = engineInstance.process(cppVec, width, height, channels);
-      let prediction = resultVec.prediction;
-      if (prediction === -2) {
-        prediction = await waitForPrediction();
-      }
+      const resultVec = await engineInstance.process(cppVec, width, height, channels);
+      const prediction = resultVec.prediction;
 
       const outArr = [];
       for (let i = 0; i < resultVec.image.size(); ++i) {

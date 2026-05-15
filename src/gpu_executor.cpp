@@ -88,9 +88,6 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     if (!ready() || !weights_ || !weights_->valid() || image.size() != INPUT_VALUES) {
         return -1;
     }
-    if (inference_pending_) {
-        return -2;
-    }
 
     std::array<float, INPUT_VALUES> input{};
     for (std::size_t i = 0; i < image.size(); ++i) {
@@ -125,18 +122,16 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
     wgpu_queue_submit_one_and_destroy(queue_, command_buffer);
 
+    std::array<float, LOGIT_VALUES> logits{};
     inference_pending_ = true;
-    latest_prediction_ = -2;
-    wgpu_buffer_map_async(
-        readback_buffer_,
-        &GpuExecutor::onReadback,
-        this,
-        WGPU_MAP_MODE_READ,
-        0,
-        LOGIT_VALUES * sizeof(float)
-    );
+    wgpu_buffer_map_sync(readback_buffer_, WGPU_MAP_MODE_READ, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_get_mapped_range(readback_buffer_, 0, LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_read_mapped_range(readback_buffer_, 0, 0, logits.data(), LOGIT_VALUES * sizeof(float));
+    wgpu_buffer_unmap(readback_buffer_);
 
-    return -2;
+    latest_prediction_ = argmax(logits);
+    inference_pending_ = false;
+    return latest_prediction_;
 #else
     (void)image;
     return -1;
@@ -200,23 +195,6 @@ void GpuExecutor::onDevice(WGpuDevice device, void* user_data) {
     self->webgpu_ready_ = true;
     self->createNetworkResources();
     std::cout << "wasm_webgpu device ready" << std::endl;
-}
-
-void GpuExecutor::onReadback(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size) {
-    auto* self = static_cast<GpuExecutor*>(user_data);
-    if (!self || !buffer) {
-        return;
-    }
-
-    std::array<float, LOGIT_VALUES> logits{};
-    wgpu_buffer_get_mapped_range(buffer, offset, size);
-    wgpu_buffer_read_mapped_range(buffer, offset, 0, logits.data(), LOGIT_VALUES * sizeof(float));
-    wgpu_buffer_unmap(buffer);
-
-    self->latest_prediction_ = argmax(logits);
-    self->inference_pending_ = false;
-    std::cout << "wasm_webgpu prediction ready: " << self->latest_prediction_ << std::endl;
-    (void)mode;
 }
 
 WGpuBuffer GpuExecutor::createBuffer(std::size_t size, WGPU_BUFFER_USAGE_FLAGS usage) const {

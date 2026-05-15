@@ -54,7 +54,6 @@ private:
 
     static void onAdapter(WGpuAdapter adapter, void* user_data);
     static void onDevice(WGpuDevice device, void* user_data);
-    static void onReadback(WGpuBuffer buffer, void* user_data, WGPU_MAP_MODE_FLAGS mode, double_int53_t offset, double_int53_t size);
     void createNetworkResources();
     WGpuBuffer createBuffer(std::size_t size, WGPU_BUFFER_USAGE_FLAGS usage) const;
 #endif

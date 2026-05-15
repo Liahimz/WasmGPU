@@ -27,7 +27,7 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
     class_<WasmGpuEngine>("GpuEngine")
         .constructor<>()
         .function("configure", &WasmGpuEngine::configure)
-        .function("process", &WasmGpuEngine::process)
+        .function("process", &WasmGpuEngine::process, async())
         .function("argmax", &WasmGpuEngine::argmax)
         .function("webgpuReady", &WasmGpuEngine::webgpuReady)
         .function("inferencePending", &WasmGpuEngine::inferencePending)
