@@ -1,7 +1,7 @@
 // bindings.cpp
 #include <emscripten/bind.h>
-#include "dummy_engine.h"
-
+// #include "dummy_engine.h"
+#include "gpu_engine.h"
 using namespace emscripten;
 
 EMSCRIPTEN_BINDINGS(my_dummy_engine) {
@@ -9,10 +9,12 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .field("image", &ProcessResult::image)
         .field("width", &ProcessResult::width)
         .field("height", &ProcessResult::height);
-    class_<DummyEngine>("DummyEngine")
+    class_<GpuEngine>("GpuEngine")
         .constructor<>()
-        .function("configure", &DummyEngine::configure)
-        .function("process", &DummyEngine::process)
+        .function("configure", &GpuEngine::configure)
+        .function("process", &GpuEngine::process)
+        .function("argmax", &GpuEngine::argmax)
         ;
     register_vector<uint8_t>("Uint8Vector");
+    register_vector<float>("FloatVector");
 }

@@ -23,21 +23,38 @@ def run_cmd(cmd, cwd=None):
     if res.returncode != 0:
         print("Error running command:", ' '.join(cmd))
         sys.exit(res.returncode)
+
+def find_tbb_static_lib():
+    if not os.path.isdir(TBB_BUILD):
+        return None
+
+    for root, _, files in os.walk(TBB_BUILD):
+        if "libtbb.a" in files:
+            return os.path.join(root, "libtbb.a")
+
+    return None
         
 def check_and_build_tbb():
-    # Check if build-emscripten exists and is non-empty
-    if os.path.isdir(TBB_BUILD) and os.listdir(TBB_BUILD):
-        print(f"TBB already built in {TBB_BUILD}. Skipping TBB build.")
+    tbb_lib = find_tbb_static_lib()
+    if tbb_lib:
+        print(f"TBB already built: {tbb_lib}. Skipping TBB build.")
         return
 
     print(f"Building TBB in {TBB_BUILD} ...")
-    if not os.path.exists(TBB_BUILD):
-        os.makedirs(TBB_BUILD)
+    if os.path.exists(TBB_BUILD):
+        shutil.rmtree(TBB_BUILD)
+    os.makedirs(TBB_BUILD)
+
     run_cmd([
         "emcmake", "cmake", "..",
         "-DCMAKE_BUILD_TYPE=Release",
-        "-DTBB_TEST=OFF", "-DTBB_STRICT=OFF",
-        "-DTBB_EXAMPLES=OFF", "-DTBB4PY_BUILD=OFF"
+        "-DBUILD_SHARED_LIBS=OFF",
+        "-DTBB_TEST=OFF",
+        "-DTBB_STRICT=OFF",
+        "-DTBB_EXAMPLES=OFF",
+        "-DTBB4PY_BUILD=OFF",
+        "-DTBBMALLOC_BUILD=OFF",
+        "-DTBBMALLOC_PROXY_BUILD=OFF",
     ], cwd=TBB_BUILD)
     run_cmd(["emmake", "make", "-j", "8"], cwd=TBB_BUILD)
     print("TBB build complete.\n")      
@@ -83,6 +100,10 @@ def main():
                 shutil.copytree(s, d)
             else:
                 shutil.copy2(s, d)
+
+    SHADERS_DIR = "shaders"
+    if os.path.exists(SHADERS_DIR):
+        shutil.copytree(SHADERS_DIR, os.path.join(BUILD_DIR, SHADERS_DIR))
 
     print("\n✅ Build complete. To serve, run:")
     print(f"  cd {BUILD_DIR} && npx serve\n")
