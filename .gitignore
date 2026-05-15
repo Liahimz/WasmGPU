@@ -69,3 +69,7 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+
+# local MNIST/training scratch data
+network_trainer/data/
+network_trainer/checkpoints/

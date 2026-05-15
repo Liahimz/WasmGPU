@@ -1,0 +1,61 @@
+{
+  "name": "tiny_lenet",
+  "dtype": "float32",
+  "endianness": "little",
+  "input_shape": [
+    1,
+    28,
+    28
+  ],
+  "layers": [
+    {
+      "type": "conv2d",
+      "in_channels": 1,
+      "out_channels": 4,
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0
+      ],
+      "weights": "tiny_lenet_conv_weights_f32.bin",
+      "weights_shape": [
+        4,
+        3,
+        3
+      ],
+      "bias": "tiny_lenet_conv_bias_f32.bin",
+      "bias_shape": [
+        4
+      ]
+    },
+    {
+      "type": "relu",
+      "shape": [
+        4,
+        26,
+        26
+      ]
+    },
+    {
+      "type": "linear",
+      "in_features": 2704,
+      "out_features": 10,
+      "weights": "tiny_lenet_linear_weights_f32.bin",
+      "weights_shape": [
+        10,
+        2704
+      ],
+      "bias": "tiny_lenet_linear_bias_f32.bin",
+      "bias_shape": [
+        10
+      ]
+    }
+  ]
+}
