@@ -7,6 +7,7 @@ struct ProcessResult {
     std::vector<uint8_t> image;
     int width;
     int height;
+    int prediction = -1;
 };
 
 class GpuEngine {

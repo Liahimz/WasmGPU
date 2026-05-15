@@ -1,0 +1,7 @@
+#pragma once
+
+namespace internal {
+
+@EMBED_SHADER_ROWS@
+
+} // namespace internal

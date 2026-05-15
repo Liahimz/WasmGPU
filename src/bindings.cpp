@@ -15,7 +15,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
     value_object<ProcessResult>("ProcessResult")
         .field("image", &ProcessResult::image)
         .field("width", &ProcessResult::width)
-        .field("height", &ProcessResult::height);
+        .field("height", &ProcessResult::height)
+        .field("prediction", &ProcessResult::prediction);
 #if defined(BUILD_DUMMY_ENGINE)
     class_<DummyEngine>("DummyEngine")
         .constructor<>()
@@ -29,6 +30,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("process", &WasmGpuEngine::process)
         .function("argmax", &WasmGpuEngine::argmax)
         .function("webgpuReady", &WasmGpuEngine::webgpuReady)
+        .function("inferencePending", &WasmGpuEngine::inferencePending)
+        .function("latestPrediction", &WasmGpuEngine::latestPrediction)
         ;
 #else
     class_<GpuEngine>("GpuEngine")

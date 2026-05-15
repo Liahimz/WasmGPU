@@ -1,18 +1,16 @@
 // wasm_gpu_engine.h
 #pragma once
+#include "gpu_executor.h"
 #include "network_weights.h"
 
 #include <vector>
 #include <cstdint>
 
-#ifdef __EMSCRIPTEN__
-#include "lib_webgpu_fwd.h"
-#endif
-
 struct ProcessResult {
     std::vector<uint8_t> image;
     int width;
     int height;
+    int prediction = -1;
 };
 
 class WasmGpuEngine {
@@ -27,21 +25,13 @@ public:
 
     int argmax(const std::vector<float>& data);
     bool webgpuReady() const;
+    bool inferencePending() const;
+    int latestPrediction() const;
 
 private:
   int target_size = 0;
-  bool webgpu_requested_ = false;
-  bool webgpu_ready_ = false;
   network::TinyLenetWeights weights_;
+  GpuExecutor gpu_;
 
-  void requestWebGpuDevice();
-
-#ifdef __EMSCRIPTEN__
-  WGpuAdapter adapter_ = 0;
-  WGpuDevice device_ = 0;
-  WGpuQueue queue_ = 0;
-
-  static void onAdapter(WGpuAdapter adapter, void* user_data);
-  static void onDevice(WGpuDevice device, void* user_data);
-#endif
+  int runNetwork(const std::vector<uint8_t>& image);
 };

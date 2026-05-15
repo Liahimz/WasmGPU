@@ -16,6 +16,20 @@ let readyPromise = SmartIDEngine({
   return Module;
 });
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPrediction() {
+  for (let i = 0; i < 200; ++i) {
+    if (!engineInstance.inferencePending()) {
+      return engineInstance.latestPrediction();
+    }
+    await sleep(5);
+  }
+  return engineInstance.latestPrediction();
+}
+
 onmessage = async function(msg) {
   try {
     await readyPromise;
@@ -34,6 +48,10 @@ onmessage = async function(msg) {
       }
 
       const resultVec = engineInstance.process(cppVec, width, height, channels);
+      let prediction = resultVec.prediction;
+      if (prediction === -2) {
+        prediction = await waitForPrediction();
+      }
 
       const outArr = [];
       for (let i = 0; i < resultVec.image.size(); ++i) {
@@ -43,6 +61,7 @@ onmessage = async function(msg) {
       const outImage = new Uint8Array(outArr);
       console.log("Preprocessed 28x28 image:", outImage);
       console.log("C++ WebGPU ready:", engineInstance.webgpuReady());
+      console.log("Prediction:", prediction);
 
       cppVec.delete();
 
@@ -51,6 +70,7 @@ onmessage = async function(msg) {
         outImage,
         width: resultVec.width,
         height: resultVec.height,
+        prediction,
         webgpuReady: engineInstance.webgpuReady(),
       }, [outImage.buffer]);
     }

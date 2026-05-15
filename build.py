@@ -119,7 +119,7 @@ def main():
         sys.exit(1)
 
     SHADERS_DIR = "shaders"
-    if args.mode in ("cpp-webgpu", "js-webgpu") and os.path.exists(SHADERS_DIR):
+    if args.mode == "js-webgpu" and os.path.exists(SHADERS_DIR):
         shutil.copytree(SHADERS_DIR, os.path.join(BUILD_DIR, SHADERS_DIR))
 
     print("\n✅ Build complete. To serve, run:")
