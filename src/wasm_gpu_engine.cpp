@@ -21,6 +21,15 @@ WasmGpuEngine::~WasmGpuEngine() {
 void WasmGpuEngine::configure(int target_size_) {
     std::cout << "Configure" << std::endl;
     this->target_size = target_size_;
+    weights_ = network::loadTinyLenetWeights();
+    if (weights_.valid()) {
+        std::cout << "Loaded embedded tiny_lenet weights: "
+                  << weights_.conv_weights.size() << " conv weights, "
+                  << weights_.linear_weights.size() << " linear weights"
+                  << std::endl;
+    } else {
+        std::cerr << "Failed to load embedded tiny_lenet weights: " << weights_.error << std::endl;
+    }
     requestWebGpuDevice();
 }
 

@@ -1,0 +1,22 @@
+#pragma once
+
+#include <cstddef>
+#include <cstdint>
+
+namespace internal {
+
+@EMBED_ARRAY_ROWS@
+
+struct EmbeddedNetworkBlob {
+    const char* name;
+    const uint8_t* data;
+    std::size_t size;
+};
+
+static constexpr EmbeddedNetworkBlob NETWORK_BLOBS[] = {
+@EMBED_BLOB_ROWS@
+};
+
+static constexpr std::size_t NETWORK_BLOB_COUNT = @EMBED_BLOB_COUNT@;
+
+} // namespace internal

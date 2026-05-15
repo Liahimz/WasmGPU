@@ -1,5 +1,7 @@
 // wasm_gpu_engine.h
 #pragma once
+#include "network_weights.h"
+
 #include <vector>
 #include <cstdint>
 
@@ -30,6 +32,7 @@ private:
   int target_size = 0;
   bool webgpu_requested_ = false;
   bool webgpu_ready_ = false;
+  network::TinyLenetWeights weights_;
 
   void requestWebGpuDevice();
 

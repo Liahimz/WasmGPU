@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.13)
 project(dummy_engine_wasm)
 
 set(CMAKE_CXX_STANDARD 17)
+find_package(Python3 REQUIRED COMPONENTS Interpreter)
+
 set(WASM_GPU_BUILD_MODE "cpp-webgpu" CACHE STRING "Build mode: cpp-webgpu, js-webgpu, or dummy")
 set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu js-webgpu dummy)
 
@@ -9,6 +11,9 @@ set(TBB_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/tbb)
 include_directories(${TBB_ROOT}/include)
 set(WASM_WEBGPU_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/wasm_webgpu)
 set(WASM_WEBGPU_LIB_DIR ${WASM_WEBGPU_ROOT}/lib)
+set(NETWORK_DATA_DIR ${CMAKE_SOURCE_DIR}/network_data)
+set(EMBEDDED_DATA_TEMPLATE ${CMAKE_SOURCE_DIR}/cmake/embedded_data.h.cmakein)
+set(EMBEDDED_DATA_HEADER ${CMAKE_CURRENT_BINARY_DIR}/src/embedded_data.h)
 # set(TBB_LIB_DIR ${CMAKE_SOURCE_DIR}/thirdparty/tbb/build-emscripten/clang_20.0_cxx11_32_release)
 # link_directories(${TBB_LIB_DIR})
 
@@ -34,6 +39,26 @@ set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
 include_directories(include)
 
+file(GLOB NETWORK_DATA_FILES CONFIGURE_DEPENDS
+    "${NETWORK_DATA_DIR}/*.bin"
+    "${NETWORK_DATA_DIR}/*.json"
+)
+
+add_custom_command(
+    OUTPUT ${EMBEDDED_DATA_HEADER}
+    COMMAND ${Python3_EXECUTABLE}
+        ${CMAKE_SOURCE_DIR}/network_trainer/embed_network_data.py
+        --input-dir ${NETWORK_DATA_DIR}
+        --template ${EMBEDDED_DATA_TEMPLATE}
+        --output ${EMBEDDED_DATA_HEADER}
+    DEPENDS
+        ${CMAKE_SOURCE_DIR}/network_trainer/embed_network_data.py
+        ${EMBEDDED_DATA_TEMPLATE}
+        ${NETWORK_DATA_FILES}
+    COMMENT "Embedding network_data files"
+    VERBATIM
+)
+
 set(WASM_GPU_ENGINE_SOURCE src/wasm_gpu_engine.cpp)
 set(WASM_GPU_ENGINE_DEFINE BUILD_WASM_WEBGPU_ENGINE)
 set(WASM_GPU_USE_WASM_WEBGPU ON)
@@ -55,7 +80,9 @@ message(STATUS "WASM GPU build mode: ${WASM_GPU_BUILD_MODE}")
 add_executable(wasm_gpu
     ${WASM_GPU_ENGINE_SOURCE}
     src/bindings.cpp
+    src/network_weights.cpp
     src/parallel_tools.cpp
+    ${EMBEDDED_DATA_HEADER}
 )
 
 # Pthread and Emscripten flags
@@ -78,6 +105,7 @@ add_executable(wasm_gpu
 
 target_link_libraries(wasm_gpu PRIVATE ${TBB_LIB_DIR}/libtbb.a embind)
 
+target_include_directories(wasm_gpu PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src)
 target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
 target_compile_definitions(wasm_gpu PRIVATE ${WASM_GPU_ENGINE_DEFINE})
 
