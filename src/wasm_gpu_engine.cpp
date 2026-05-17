@@ -100,37 +100,40 @@ ProcessResult WasmGpuEngine::processCpu(
     return result;
 }
 
-int WasmGpuEngine::benchmarkCpuLarge(int mode) {
+int WasmGpuEngine::benchmarkCpuLarge(int mode, int input_seed) {
     cpu_.prepareSyntheticLarge();
 
     const auto inference_start = Clock::now();
-    const int prediction = cpu_.inferSyntheticLarge(static_cast<CppExecutorMode>(mode));
+    const int prediction = cpu_.inferSyntheticLarge(static_cast<CppExecutorMode>(mode), static_cast<uint32_t>(input_seed));
     const auto inference_end = Clock::now();
 
     std::cout << "[timing] synthetic_cpu_large mode=" << cpuModeName(mode)
               << " input=1000x500 kernel=5x3"
+              << " seed=" << input_seed
               << " inference=" << elapsedMs(inference_start, inference_end)
               << "ms prediction=" << prediction
               << std::endl;
     return prediction;
 }
 
-int WasmGpuEngine::benchmarkGpuLarge() {
+int WasmGpuEngine::benchmarkGpuLarge(int input_seed) {
     gpu_.prepareSyntheticLarge();
 
     const auto inference_start = Clock::now();
-    const int prediction = gpu_.benchmarkSyntheticLarge();
+    const int prediction = gpu_.benchmarkSyntheticLarge(static_cast<uint32_t>(input_seed));
     const auto inference_end = Clock::now();
 
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
     std::cout << "[timing] synthetic_gpu_large_async_start"
               << " input=1000x500 kernel=5x3"
+              << " seed=" << input_seed
               << " submit=" << elapsedMs(inference_start, inference_end)
               << "ms"
               << std::endl;
 #else
     std::cout << "[timing] synthetic_gpu_large"
               << " input=1000x500 kernel=5x3"
+              << " seed=" << input_seed
               << " inference=" << elapsedMs(inference_start, inference_end)
               << "ms prediction=" << prediction
               << std::endl;

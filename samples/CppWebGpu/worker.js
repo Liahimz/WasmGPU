@@ -44,11 +44,11 @@ onmessage = async function(msg) {
         simd: cpuSimdResult.prediction,
         simdThreads: cpuSimdThreadsResult.prediction,
       };
-      const largeGpuPrediction = await engineInstance.benchmarkGpuLarge();
+      const largeGpuPrediction = await engineInstance.benchmarkGpuLarge(1);
       const largeCpuPredictions = {
-        scalar: engineInstance.benchmarkCpuLarge(0),
-        simd: engineInstance.benchmarkCpuLarge(1),
-        simdThreads: engineInstance.benchmarkCpuLarge(2),
+        scalar: engineInstance.benchmarkCpuLarge(0, 1),
+        simd: engineInstance.benchmarkCpuLarge(1, 1),
+        simdThreads: engineInstance.benchmarkCpuLarge(2, 1),
       };
 
       const outArr = [];

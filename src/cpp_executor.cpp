@@ -175,22 +175,17 @@ float nextWeight(uint32_t& state, float scale) {
 }
 
 struct LargeSyntheticNetwork {
-    std::vector<float> input;
     std::vector<float> conv_weights;
     std::vector<float> conv_bias;
     std::vector<float> linear_weights;
     std::vector<float> linear_bias;
 
     LargeSyntheticNetwork()
-        : input(LargeInputValues),
-          conv_weights(LargeChannels * LargeKernelWidth * LargeKernelHeight),
+        : conv_weights(LargeChannels * LargeKernelWidth * LargeKernelHeight),
           conv_bias(LargeChannels),
           linear_weights(LogitValues * LargeConvValues),
           linear_bias(LogitValues) {
         uint32_t state = 0x12345678u;
-        for (float& value : input) {
-            value = nextWeight(state, 1.0f);
-        }
         for (float& value : conv_weights) {
             value = nextWeight(state, 0.05f);
         }
@@ -211,7 +206,17 @@ const LargeSyntheticNetwork& largeSyntheticNetwork() {
     return network;
 }
 
+std::vector<float> makeLargeInput(uint32_t seed) {
+    std::vector<float> input(LargeInputValues);
+    uint32_t state = 0x87654321u ^ seed;
+    for (float& value : input) {
+        value = nextWeight(state, 1.0f);
+    }
+    return input;
+}
+
 void computeLargeConvChannel(
+    const float* input,
     const LargeSyntheticNetwork& network,
     float* conv_output,
     int channel
@@ -226,7 +231,7 @@ void computeLargeConvChannel(
                 for (int kx = 0; kx < LargeKernelWidth; ++kx) {
                     const int input_index = (y + ky) * LargeInputWidth + (x + kx);
                     const int weight_index = weight_offset + ky * LargeKernelWidth + kx;
-                    sum += network.input[input_index] * network.conv_weights[weight_index];
+                    sum += input[input_index] * network.conv_weights[weight_index];
                 }
             }
             conv_output[output_offset + y * LargeConvWidth + x] = std::max(sum, 0.0f);
@@ -235,6 +240,7 @@ void computeLargeConvChannel(
 }
 
 struct LargeConvThreadArgs {
+    const float* input = nullptr;
     const LargeSyntheticNetwork* network = nullptr;
     float* conv_output = nullptr;
     int channel = 0;
@@ -242,29 +248,30 @@ struct LargeConvThreadArgs {
 
 void* largeConvThreadMain(void* user_data) {
     auto* args = static_cast<LargeConvThreadArgs*>(user_data);
-    computeLargeConvChannel(*args->network, args->conv_output, args->channel);
+    computeLargeConvChannel(args->input, *args->network, args->conv_output, args->channel);
     return nullptr;
 }
 
-void computeLargeConvScalar(const LargeSyntheticNetwork& network, float* conv_output) {
+void computeLargeConvScalar(const float* input, const LargeSyntheticNetwork& network, float* conv_output) {
     for (int channel = 0; channel < LargeChannels; ++channel) {
-        computeLargeConvChannel(network, conv_output, channel);
+        computeLargeConvChannel(input, network, conv_output, channel);
     }
 }
 
-void computeLargeConvThreaded(const LargeSyntheticNetwork& network, float* conv_output) {
+void computeLargeConvThreaded(const float* input, const LargeSyntheticNetwork& network, float* conv_output) {
     std::array<pthread_t, LargeChannels> threads{};
     std::array<LargeConvThreadArgs, LargeChannels> args{};
     std::array<bool, LargeChannels> started{};
 
     for (int channel = 0; channel < LargeChannels; ++channel) {
+        args[channel].input = input;
         args[channel].network = &network;
         args[channel].conv_output = conv_output;
         args[channel].channel = channel;
 
         started[channel] = pthread_create(&threads[channel], nullptr, largeConvThreadMain, &args[channel]) == 0;
         if (!started[channel]) {
-            computeLargeConvChannel(network, conv_output, channel);
+            computeLargeConvChannel(input, network, conv_output, channel);
         }
     }
 
@@ -338,16 +345,17 @@ void CppExecutor::prepareSyntheticLarge() const {
     (void)largeSyntheticNetwork();
 }
 
-int CppExecutor::inferSyntheticLarge(CppExecutorMode mode) const {
+int CppExecutor::inferSyntheticLarge(CppExecutorMode mode, uint32_t input_seed) const {
     mode = normalizeMode(mode);
 
     const LargeSyntheticNetwork& network = largeSyntheticNetwork();
+    std::vector<float> input = makeLargeInput(input_seed);
     std::vector<float> conv_output(LargeConvValues);
 
     if (mode == CppExecutorMode::SimdThreads) {
-        computeLargeConvThreaded(network, conv_output.data());
+        computeLargeConvThreaded(input.data(), network, conv_output.data());
     } else {
-        computeLargeConvScalar(network, conv_output.data());
+        computeLargeConvScalar(input.data(), network, conv_output.data());
     }
 
     const bool use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;

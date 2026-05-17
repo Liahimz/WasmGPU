@@ -78,6 +78,11 @@ std::vector<float> makeSyntheticValues(std::size_t count, uint32_t& state, float
     return values;
 }
 
+std::vector<float> makeSyntheticInput(uint32_t input_seed) {
+    uint32_t state = 0x87654321u ^ input_seed;
+    return makeSyntheticValues(LARGE_INPUT_VALUES, state, 1.0f);
+}
+
 WGpuComputePassDescriptor timestampPassDescriptor(WGpuQuerySet query_set, int begin_index, int end_index) {
     WGpuComputePassDescriptor desc = WGPU_COMPUTE_PASS_DESCRIPTOR_DEFAULT_INITIALIZER;
     desc.timestampWrites.querySet = query_set;
@@ -146,7 +151,7 @@ GpuExecutor::~GpuExecutor() {
 #endif
 }
 
-int GpuExecutor::benchmarkSyntheticLarge() {
+int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
 #ifdef __EMSCRIPTEN__
     if (!webgpu_ready_) {
         return -1;
@@ -156,7 +161,10 @@ int GpuExecutor::benchmarkSyntheticLarge() {
         return -1;
     }
 
+    std::vector<float> input = makeSyntheticInput(input_seed);
+
     const auto submit_start = Clock::now();
+    wgpu_queue_write_buffer(queue_, large_input_buffer_, 0, input.data(), input.size() * sizeof(float));
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device_, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
 
     WGpuComputePassDescriptor conv_pass_desc = timestampPassDescriptor(large_timestamp_query_set_, 0, 1);
@@ -750,10 +758,6 @@ void GpuExecutor::createLargeNetworkResources() {
     }
 
     uint32_t state = 0x12345678u;
-    {
-        std::vector<float> values = makeSyntheticValues(LARGE_INPUT_VALUES, state, 1.0f);
-        wgpu_queue_write_buffer(queue_, large_input_buffer_, 0, values.data(), input_size);
-    }
     {
         std::vector<float> values = makeSyntheticValues(LARGE_CONV_WEIGHT_VALUES, state, 0.05f);
         wgpu_queue_write_buffer(queue_, large_conv_weights_buffer_, 0, values.data(), conv_weights_size);

@@ -216,6 +216,8 @@ Large synthetic path:
 [timing] synthetic_cpu_large mode=simd_threads input=1000x500 kernel=5x3 inference=...ms prediction=...
 ```
 
+The synthetic large benchmark keeps weights and pipelines prepared, but regenerates the input tensor from a per-run seed. That models a frozen network receiving different activations/inputs each inference.
+
 GPU detail timing:
 
 ```text

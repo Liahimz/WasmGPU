@@ -133,7 +133,7 @@ onmessage = async function(msg) {
             resultVec = warmupResult;
           }
         }),
-        await warmupGpu("synthetic_gpu_large", () => engineInstance.benchmarkGpuLarge()),
+        await warmupGpu("synthetic_gpu_large", () => engineInstance.benchmarkGpuLarge(0)),
       ];
       console.table(warmupStats);
 
@@ -168,23 +168,23 @@ onmessage = async function(msg) {
         };
 
         const largeGpuRun = await timedGpuRun("synthetic_gpu_large", run, cacheScrub, () =>
-          engineInstance.benchmarkGpuLarge()
+          engineInstance.benchmarkGpuLarge(run)
         );
         runs.largeGpu.push(largeGpuRun);
         largeGpuPrediction = largeGpuRun.prediction;
 
         const largeCpuScalarRun = timedCpuRun("synthetic_cpu_large_scalar", run, cacheScrub, () =>
-          engineInstance.benchmarkCpuLarge(0)
+          engineInstance.benchmarkCpuLarge(0, run)
         );
         runs.largeCpuScalar.push(largeCpuScalarRun);
 
         const largeCpuSimdRun = timedCpuRun("synthetic_cpu_large_simd", run, cacheScrub, () =>
-          engineInstance.benchmarkCpuLarge(1)
+          engineInstance.benchmarkCpuLarge(1, run)
         );
         runs.largeCpuSimd.push(largeCpuSimdRun);
 
         const largeCpuSimdThreadsRun = timedCpuRun("synthetic_cpu_large_simd_threads", run, cacheScrub, () =>
-          engineInstance.benchmarkCpuLarge(2)
+          engineInstance.benchmarkCpuLarge(2, run)
         );
         runs.largeCpuSimdThreads.push(largeCpuSimdThreadsRun);
         largeCpuPredictions = {

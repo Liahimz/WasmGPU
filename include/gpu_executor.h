@@ -19,7 +19,7 @@ public:
     bool ready() const;
     int infer(const std::vector<uint8_t>& image);
     void prepareSyntheticLarge();
-    int benchmarkSyntheticLarge();
+    int benchmarkSyntheticLarge(uint32_t input_seed);
     bool inferencePending() const;
     int latestPrediction() const;
 
