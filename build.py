@@ -25,6 +25,18 @@ def run_cmd(cmd, cwd=None):
         print("Error running command:", ' '.join(cmd))
         sys.exit(res.returncode)
 
+def clean_dir_contents(path):
+    if not os.path.isdir(path):
+        os.makedirs(path)
+        return
+
+    for item in os.listdir(path):
+        item_path = os.path.join(path, item)
+        if os.path.isdir(item_path) and not os.path.islink(item_path):
+            shutil.rmtree(item_path)
+        else:
+            os.remove(item_path)
+
 def find_tbb_static_lib():
     if not os.path.isdir(TBB_BUILD):
         return None
@@ -80,10 +92,9 @@ def main():
     #build tbb for emiscripten
     check_and_build_tbb()
     
-    # Clean build dir
-    if os.path.exists(BUILD_DIR):
-        shutil.rmtree(BUILD_DIR)
-    os.makedirs(BUILD_DIR)
+    # Clean build output without deleting the directory itself. This keeps
+    # terminals already inside build/ from ending up with a removed cwd.
+    clean_dir_contents(BUILD_DIR)
 
     # Build with emcmake/cmake
     # Build out-of-source in a 'cmake-build' directory
