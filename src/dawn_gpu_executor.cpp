@@ -235,6 +235,7 @@ void GpuExecutor::requestWebGpuDevice() {
 
     WGPURequestAdapterOptions options = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
     options.powerPreference = WGPUPowerPreference_HighPerformance;
+    adapter_request_attempt_ = 1;
 
     WGPURequestAdapterCallbackInfo callback = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
     callback.mode = WGPUCallbackMode_AllowSpontaneous;
@@ -252,6 +253,18 @@ void GpuExecutor::onAdapter(
 ) {
     auto* self = static_cast<GpuExecutor*>(userdata1);
     if (!self || status != WGPURequestAdapterStatus_Success || !adapter) {
+        if (self && self->adapter_request_attempt_ == 1) {
+            self->adapter_request_attempt_ = 2;
+            std::cerr << "High-performance emdawnwebgpu adapter request failed; retrying with default adapter options." << std::endl;
+
+            WGPURequestAdapterOptions options = WGPU_REQUEST_ADAPTER_OPTIONS_INIT;
+            WGPURequestAdapterCallbackInfo callback = WGPU_REQUEST_ADAPTER_CALLBACK_INFO_INIT;
+            callback.mode = WGPUCallbackMode_AllowSpontaneous;
+            callback.callback = &GpuExecutor::onAdapter;
+            callback.userdata1 = self;
+            wgpuInstanceRequestAdapter(self->instance_, &options, callback);
+            return;
+        }
         std::cerr << "emdawnwebgpu adapter request failed." << std::endl;
         return;
     }

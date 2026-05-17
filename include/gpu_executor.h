@@ -35,6 +35,7 @@ private:
     bool timestamp_query_enabled_ = false;
     bool inference_pending_ = false;
     bool large_synthetic_data_ready_ = false;
+    int adapter_request_attempt_ = 0;
     int latest_prediction_ = -1;
 
     void requestWebGpuDevice();

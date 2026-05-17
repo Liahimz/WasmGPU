@@ -484,6 +484,7 @@ void GpuExecutor::requestWebGpuDevice() {
 
     WGpuRequestAdapterOptions options = WGPU_REQUEST_ADAPTER_OPTIONS_DEFAULT_INITIALIZER;
     options.powerPreference = WGPU_POWER_PREFERENCE_HIGH_PERFORMANCE;
+    adapter_request_attempt_ = 1;
 
     if (!navigator_gpu_request_adapter_async(&options, &GpuExecutor::onAdapter, this)) {
         std::cerr << "Failed to start WebGPU adapter request." << std::endl;
@@ -633,6 +634,15 @@ void GpuExecutor::finishLargeAsyncTimestamp() {
 void GpuExecutor::onAdapter(WGpuAdapter adapter, void* user_data) {
     auto* self = static_cast<GpuExecutor*>(user_data);
     if (!self || !adapter) {
+        if (self && self->adapter_request_attempt_ == 1) {
+            self->adapter_request_attempt_ = 2;
+            std::cerr << "High-performance WebGPU adapter request failed; retrying with default adapter options." << std::endl;
+            WGpuRequestAdapterOptions options = WGPU_REQUEST_ADAPTER_OPTIONS_DEFAULT_INITIALIZER;
+            if (!navigator_gpu_request_adapter_async(&options, &GpuExecutor::onAdapter, self)) {
+                std::cerr << "Failed to start fallback WebGPU adapter request." << std::endl;
+            }
+            return;
+        }
         std::cerr << "WebGPU adapter request failed." << std::endl;
         return;
     }

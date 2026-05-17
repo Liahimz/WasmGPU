@@ -7,14 +7,38 @@ console.log("SmartIDEngine in worker:", typeof SmartIDEngine);
 let engineInstance = null;
 let moduleObject = null;
 
+async function logWebGpuAdapterDiagnostics() {
+  if (!navigator.gpu) {
+    console.warn("[webgpu] navigator.gpu is unavailable in this worker");
+    return;
+  }
+
+  const probes = [
+    ["default", undefined],
+    ["high-performance", { powerPreference: "high-performance" }],
+    ["low-power", { powerPreference: "low-power" }],
+    ["fallback", { forceFallbackAdapter: true }],
+  ];
+
+  for (const [name, options] of probes) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter(options);
+      console.log(`[webgpu] JS adapter probe ${name}:`, adapter ? "available" : "null");
+    } catch (err) {
+      console.warn(`[webgpu] JS adapter probe ${name} threw:`, err);
+    }
+  }
+}
+
 let readyPromise = SmartIDEngine({
   mainScriptUrlOrBlob: "wasm_gpu.js",
-}).then((Module) => {
+}).then(async (Module) => {
   // WebGPU setup and buffer map callbacks can outlive the JS call that starts
   // them. Keep Emscripten's runtime alive for the worker lifetime; otherwise it
   // may call exit() after a callback returns and cancel later async GPU work.
   Module._start_keepalive_mainloop();
   moduleObject = Module;
+  await logWebGpuAdapterDiagnostics();
   engineInstance = new Module.GpuEngine();
   engineInstance.configure(28);
   engineInstance.prepareSyntheticLargeData();
