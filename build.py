@@ -11,6 +11,7 @@ WASM_BIN = "wasm_gpu.wasm"
 BUILD_MODES = {
     "cpp-webgpu": "samples/CppWebGpu",
     "cpp-webgpu-async": "samples/CppWebGpuAsync",
+    "cpp-webgpu-dawn": "samples/CppWebGpuAsync",
     "js-webgpu": "samples/JsWebGpu",
     "dummy": "samples/Dummy",
 }
@@ -80,6 +81,16 @@ def parse_args():
         default="cpp-webgpu",
         help="Build mode. Default: cpp-webgpu.",
     )
+    parser.add_argument(
+        "--emdawn-port",
+        default=os.environ.get("WASM_GPU_EMDAWN_PORT"),
+        help="Optional local emdawnwebgpu port file for cpp-webgpu-dawn.",
+    )
+    parser.add_argument(
+        "--emdawn-closure",
+        action="store_true",
+        help="Enable Closure compiler for cpp-webgpu-dawn.",
+    )
     return parser.parse_args()
 
 
@@ -104,7 +115,13 @@ def main():
     os.makedirs(CMAKE_BUILD)
 
     # Configure and build with Emscripten
-    run_cmd(["emcmake", "cmake", "..", f"-DWASM_GPU_BUILD_MODE={args.mode}"], cwd=CMAKE_BUILD)
+    cmake_configure = ["emcmake", "cmake", "..", f"-DWASM_GPU_BUILD_MODE={args.mode}"]
+    if args.mode == "cpp-webgpu-dawn":
+        if args.emdawn_port:
+            cmake_configure.append(f"-DWASM_GPU_EMDAWN_PORT={args.emdawn_port}")
+        if args.emdawn_closure:
+            cmake_configure.append("-DWASM_GPU_EMDAWN_USE_CLOSURE=ON")
+    run_cmd(cmake_configure, cwd=CMAKE_BUILD)
     run_cmd(["cmake", "--build", ".", "--config", "Release"], cwd=CMAKE_BUILD)
 
     # Move WASM outputs

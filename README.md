@@ -5,6 +5,7 @@ Small pet project for learning how WebAssembly, C++, JavaScript, pthreads, SIMD,
 The current main demo preprocesses an image in C++/WASM, runs a tiny LeNet-like network, and compares several execution paths:
 
 - C++ preprocessing + C++ WebGPU compute through `wasm_webgpu`
+- C++ preprocessing + C++ WebGPU compute through Emscripten/Dawn `emdawnwebgpu`
 - C++ preprocessing + CPU scalar inference
 - C++ preprocessing + CPU SIMD inference
 - C++ preprocessing + CPU SIMD plus pthreaded convolution
@@ -14,12 +15,13 @@ This is intentionally simple and experimental. The point is to make the data mov
 
 ## Build Modes
 
-The build script supports four modes:
+The build script supports five modes:
 
 | Mode | Meaning | Sample folder |
 | --- | --- | --- |
 | `cpp-webgpu` | Default desktop benchmark mode. C++/WASM owns WebGPU through `thirdparty/wasm_webgpu` and uses JSPI for sync-looking readback. | `samples/CppWebGpu` |
 | `cpp-webgpu-async` | Mobile-friendly C++ WebGPU mode. Uses async readback callbacks instead of JSPI / `WebAssembly.Suspending`. | `samples/CppWebGpuAsync` |
+| `cpp-webgpu-dawn` | Experimental comparison mode. Uses Emscripten's Dawn-backed `--use-port=emdawnwebgpu` WebGPU binding with the same async benchmark UI and CPU paths. Requires Emscripten 4.0.10+. | `samples/CppWebGpuAsync` |
 | `js-webgpu` | Older path where JavaScript owns WebGPU and calls WASM for preprocessing/postprocessing. | `samples/JsWebGpu` |
 | `dummy` | Minimal CPU/sample mode for older experiments. | `samples/Dummy` |
 
@@ -34,9 +36,12 @@ Explicit mode:
 ```bash
 python3 ./build.py --mode cpp-webgpu
 python3 ./build.py --mode cpp-webgpu-async
+python3 ./build.py --mode cpp-webgpu-dawn
 python3 ./build.py --mode js-webgpu
 python3 ./build.py --mode dummy
 ```
+
+For `cpp-webgpu-dawn`, Closure is disabled by default because the current Emscripten/Dawn combo can fail Closure on generated exception glue. To force it, add `--emdawn-closure`.
 
 The script writes the runnable site into `build/`.
 

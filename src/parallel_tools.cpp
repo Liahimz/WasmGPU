@@ -21,7 +21,10 @@ extern "C" {
     std::cout << "start_keepalive_mainloop" << std::endl;
     if (!keep_alive.exchange(true)) {
       std::cout << "Started dummy main loop to keep WASM alive" << std::endl;
-      emscripten_set_main_loop(idle_main_loop, 1, 1);
+      // Keep the worker runtime alive while async WebGPU callbacks are pending.
+      // simulate_infinite_loop must stay false because JS calls this during
+      // module setup and still needs to continue constructing the engine.
+      emscripten_set_main_loop(idle_main_loop, 1, 0);
     }
   }
 

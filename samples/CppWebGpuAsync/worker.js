@@ -10,10 +10,14 @@ let moduleObject = null;
 let readyPromise = SmartIDEngine({
   mainScriptUrlOrBlob: "wasm_gpu.js",
 }).then((Module) => {
+  // WebGPU setup and buffer map callbacks can outlive the JS call that starts
+  // them. Keep Emscripten's runtime alive for the worker lifetime; otherwise it
+  // may call exit() after a callback returns and cancel later async GPU work.
+  Module._start_keepalive_mainloop();
+  moduleObject = Module;
   engineInstance = new Module.GpuEngine();
   engineInstance.configure(28);
   engineInstance.prepareSyntheticLargeData();
-  moduleObject = Module;
   return Module;
 });
 

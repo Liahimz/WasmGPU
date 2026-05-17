@@ -6,7 +6,9 @@
 #include <cstddef>
 #include <vector>
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+#include <webgpu/webgpu.h>
+#elif defined(__EMSCRIPTEN__)
 #include "lib_webgpu_fwd.h"
 #endif
 
@@ -37,7 +39,78 @@ private:
 
     void requestWebGpuDevice();
 
-#ifdef __EMSCRIPTEN__
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    WGPUInstance instance_ = nullptr;
+    WGPUAdapter adapter_ = nullptr;
+    WGPUDevice device_ = nullptr;
+    WGPUQueue queue_ = nullptr;
+    WGPUComputePipeline conv_pipeline_ = nullptr;
+    WGPUComputePipeline linear_pipeline_ = nullptr;
+    WGPUBindGroupLayout conv_bind_group_layout_ = nullptr;
+    WGPUBindGroupLayout linear_bind_group_layout_ = nullptr;
+    WGPUPipelineLayout conv_pipeline_layout_ = nullptr;
+    WGPUPipelineLayout linear_pipeline_layout_ = nullptr;
+    WGPUBindGroup conv_bind_group_ = nullptr;
+    WGPUBindGroup linear_bind_group_ = nullptr;
+    WGPUBuffer input_buffer_ = nullptr;
+    WGPUBuffer conv_weights_buffer_ = nullptr;
+    WGPUBuffer conv_bias_buffer_ = nullptr;
+    WGPUBuffer conv_output_buffer_ = nullptr;
+    WGPUBuffer linear_weights_buffer_ = nullptr;
+    WGPUBuffer linear_bias_buffer_ = nullptr;
+    WGPUBuffer logits_buffer_ = nullptr;
+    WGPUBuffer readback_buffer_ = nullptr;
+    WGPUQuerySet timestamp_query_set_ = nullptr;
+    WGPUBuffer timestamp_buffer_ = nullptr;
+    WGPUBuffer timestamp_readback_buffer_ = nullptr;
+    WGPUComputePipeline large_conv_pipeline_ = nullptr;
+    WGPUComputePipeline large_linear_partial_pipeline_ = nullptr;
+    WGPUComputePipeline large_linear_reduce_pipeline_ = nullptr;
+    WGPUBindGroupLayout large_conv_bind_group_layout_ = nullptr;
+    WGPUBindGroupLayout large_linear_partial_bind_group_layout_ = nullptr;
+    WGPUBindGroupLayout large_linear_reduce_bind_group_layout_ = nullptr;
+    WGPUPipelineLayout large_conv_pipeline_layout_ = nullptr;
+    WGPUPipelineLayout large_linear_partial_pipeline_layout_ = nullptr;
+    WGPUPipelineLayout large_linear_reduce_pipeline_layout_ = nullptr;
+    WGPUBindGroup large_conv_bind_group_ = nullptr;
+    WGPUBindGroup large_linear_partial_bind_group_ = nullptr;
+    WGPUBindGroup large_linear_reduce_bind_group_ = nullptr;
+    WGPUBuffer large_input_buffer_ = nullptr;
+    WGPUBuffer large_conv_weights_buffer_ = nullptr;
+    WGPUBuffer large_conv_bias_buffer_ = nullptr;
+    WGPUBuffer large_conv_output_buffer_ = nullptr;
+    WGPUBuffer large_linear_weights_buffer_ = nullptr;
+    WGPUBuffer large_linear_bias_buffer_ = nullptr;
+    WGPUBuffer large_partial_sums_buffer_ = nullptr;
+    WGPUBuffer large_logits_buffer_ = nullptr;
+    WGPUBuffer large_readback_buffer_ = nullptr;
+    WGPUQuerySet large_timestamp_query_set_ = nullptr;
+    WGPUBuffer large_timestamp_buffer_ = nullptr;
+    WGPUBuffer large_timestamp_readback_buffer_ = nullptr;
+    std::vector<float> large_conv_weights_data_;
+    std::vector<float> large_conv_bias_data_;
+    std::vector<float> large_linear_weights_data_;
+    std::vector<float> large_linear_bias_data_;
+    double pending_encode_submit_ms_ = 0.0;
+    double pending_input_ms_ = 0.0;
+    double pending_upload_ms_ = 0.0;
+    double pending_sync_start_ms_ = 0.0;
+    int pending_kind_ = 0;
+
+    static void onAdapter(WGPURequestAdapterStatus status, WGPUAdapter adapter, WGPUStringView message, void* userdata1, void* userdata2);
+    static void onDevice(WGPURequestDeviceStatus status, WGPUDevice device, WGPUStringView message, void* userdata1, void* userdata2);
+    static void onTinyReadbackMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2);
+    static void onTinyTimestampMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2);
+    static void onLargeReadbackMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2);
+    static void onLargeTimestampMapped(WGPUMapAsyncStatus status, WGPUStringView message, void* userdata1, void* userdata2);
+    void finishTinyAsyncReadback();
+    void finishTinyAsyncTimestamp();
+    void finishLargeAsyncReadback();
+    void finishLargeAsyncTimestamp();
+    void createNetworkResources();
+    void createLargeNetworkResources();
+    WGPUBuffer createBuffer(std::size_t size, WGPUBufferUsage usage) const;
+#elif defined(__EMSCRIPTEN__)
     WGpuAdapter adapter_ = 0;
     WGpuDevice device_ = 0;
     WGpuQueue queue_ = 0;

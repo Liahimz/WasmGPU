@@ -33,7 +33,7 @@ onmessage = async function(msg) {
       for (let i = 0; i < arr.length; ++i) {
         cppVec.push_back(arr[i]);
       }
-
+      moduleObject._stop_keepalive_mainloop();
       const resultVec = engineInstance.process(cppVec, width, height, channels, targetWidth);
 
       const outArr = [];
@@ -50,6 +50,7 @@ onmessage = async function(msg) {
         width: resultVec.width,
         height: resultVec.height,
       }, [outImage.buffer]);
+      moduleObject._start_keepalive_mainloop();
     }
   } catch (err) {
     console.error("WASM worker error:", err);
