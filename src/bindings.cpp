@@ -34,6 +34,7 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
 #endif
         .function("processCpu", &WasmGpuEngine::processCpu)
         .function("benchmarkCpuLarge", &WasmGpuEngine::benchmarkCpuLarge)
+        .function("prepareSyntheticLargeData", &WasmGpuEngine::prepareSyntheticLargeData)
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
         .function("benchmarkGpuLarge", &WasmGpuEngine::benchmarkGpuLarge)
 #else

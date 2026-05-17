@@ -18,6 +18,7 @@ public:
     void configure(const network::TinyLenetWeights* weights);
     bool ready() const;
     int infer(const std::vector<uint8_t>& image);
+    void prepareSyntheticLargeData();
     void prepareSyntheticLarge();
     int benchmarkSyntheticLarge(uint32_t input_seed);
     bool inferencePending() const;
@@ -31,6 +32,7 @@ private:
     bool large_network_ready_ = false;
     bool timestamp_query_enabled_ = false;
     bool inference_pending_ = false;
+    bool large_synthetic_data_ready_ = false;
     int latest_prediction_ = -1;
 
     void requestWebGpuDevice();
@@ -82,7 +84,13 @@ private:
     WGpuQuerySet large_timestamp_query_set_ = 0;
     WGpuBuffer large_timestamp_buffer_ = 0;
     WGpuBuffer large_timestamp_readback_buffer_ = 0;
+    std::vector<float> large_conv_weights_data_;
+    std::vector<float> large_conv_bias_data_;
+    std::vector<float> large_linear_weights_data_;
+    std::vector<float> large_linear_bias_data_;
     double pending_encode_submit_ms_ = 0.0;
+    double pending_input_ms_ = 0.0;
+    double pending_upload_ms_ = 0.0;
     double pending_sync_start_ms_ = 0.0;
     int pending_kind_ = 0;
 

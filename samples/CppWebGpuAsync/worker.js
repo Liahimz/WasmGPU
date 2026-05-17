@@ -12,6 +12,7 @@ let readyPromise = SmartIDEngine({
 }).then((Module) => {
   engineInstance = new Module.GpuEngine();
   engineInstance.configure(28);
+  engineInstance.prepareSyntheticLargeData();
   moduleObject = Module;
   return Module;
 });
@@ -38,6 +39,16 @@ async function waitForGpuPrediction(label) {
   const prediction = engineInstance.latestPrediction();
   console.log(`${label} async prediction ready:`, prediction);
   return prediction;
+}
+
+async function waitForWebGpuReady() {
+  const start = performance.now();
+  while (!engineInstance.webgpuReady()) {
+    if (performance.now() - start > 10000) {
+      throw new Error("Timed out waiting for C++ WebGPU device/resources");
+    }
+    await sleep(10);
+  }
 }
 
 function summarizeRuns(name, runs) {
@@ -93,6 +104,7 @@ function timedCpuRun(name, run, cacheScrub, fn) {
 onmessage = async function(msg) {
   try {
     await readyPromise;
+    await waitForWebGpuReady();
 
     if (msg.data.requestType === "file") {
       let arr = msg.data.imageData;

@@ -116,8 +116,22 @@ int WasmGpuEngine::benchmarkCpuLarge(int mode, int input_seed) {
     return prediction;
 }
 
+void WasmGpuEngine::prepareSyntheticLargeData() {
+    const auto start = Clock::now();
+    cpu_.prepareSyntheticLarge();
+    gpu_.prepareSyntheticLargeData();
+    const auto end = Clock::now();
+
+    std::cout << "[timing] synthetic_large_data_prepare"
+              << " elapsed=" << elapsedMs(start, end)
+              << "ms"
+              << std::endl;
+}
+
 int WasmGpuEngine::benchmarkGpuLarge(int input_seed) {
+    const auto prepare_start = Clock::now();
     gpu_.prepareSyntheticLarge();
+    const auto prepare_end = Clock::now();
 
     const auto inference_start = Clock::now();
     const int prediction = gpu_.benchmarkSyntheticLarge(static_cast<uint32_t>(input_seed));
@@ -127,6 +141,8 @@ int WasmGpuEngine::benchmarkGpuLarge(int input_seed) {
     std::cout << "[timing] synthetic_gpu_large_async_start"
               << " input=1000x500 kernel=5x3"
               << " seed=" << input_seed
+              << " prepare=" << elapsedMs(prepare_start, prepare_end)
+              << "ms"
               << " submit=" << elapsedMs(inference_start, inference_end)
               << "ms"
               << std::endl;
@@ -134,6 +150,8 @@ int WasmGpuEngine::benchmarkGpuLarge(int input_seed) {
     std::cout << "[timing] synthetic_gpu_large"
               << " input=1000x500 kernel=5x3"
               << " seed=" << input_seed
+              << " prepare=" << elapsedMs(prepare_start, prepare_end)
+              << "ms"
               << " inference=" << elapsedMs(inference_start, inference_end)
               << "ms prediction=" << prediction
               << std::endl;

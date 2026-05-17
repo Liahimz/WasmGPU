@@ -218,14 +218,32 @@ Large synthetic path:
 
 The synthetic large benchmark keeps weights and pipelines prepared, but regenerates the input tensor from a per-run seed. That models a frozen network receiving different activations/inputs each inference.
 
+Synthetic benchmark data is generated once when the worker initializes:
+
+```text
+[timing] synthetic_gpu_large_data_prepare elapsed=...ms
+[timing] synthetic_large_data_prepare elapsed=...ms
+```
+
+The first synthetic GPU use still has a preparation cost because it allocates WebGPU buffers, uploads the precomputed synthetic weights, creates shader modules, and creates compute pipelines. The benchmark reports that as `prepare=...ms` on the synthetic GPU timing line, plus a resource detail line. `synth_data` should be near zero when the worker precompute ran first.
+
+```text
+[timing] synthetic_gpu_large_async_start input=1000x500 kernel=5x3 seed=... prepare=...ms submit=...ms
+[timing] synthetic_gpu_large_resource_detail buffers=...ms timestamp=...ms synth_data=...ms data_upload=...ms layouts=...ms pipelines=...ms bind_groups=...ms total=...ms
+```
+
 GPU detail timing:
 
 ```text
-[timing] synthetic_gpu_large_detail encode_submit=...ms sync_readback=...ms gpu_conv=...ms gpu_linear_partial=...ms gpu_linear_reduce=...ms gpu_total=...ms
+[timing] gpu_detail input_convert=...ms upload=...ms encode_submit=...ms sync_readback=...ms gpu_conv=...ms gpu_linear=...ms gpu_total=...ms
+[timing] synthetic_gpu_large_detail input_generation=...ms upload=...ms encode_submit=...ms sync_readback=...ms gpu_conv=...ms gpu_linear_partial=...ms gpu_linear_reduce=...ms gpu_total=...ms
 ```
 
 Meaning:
 
+- `input_convert`: CPU-side conversion from 8-bit preprocessed pixels to float input for the tiny network.
+- `input_generation`: CPU-side synthetic input generation for the large benchmark. This is part of end-to-end benchmark time, but not GPU utilization.
+- `upload`: `wgpu_queue_write_buffer` time for the input buffer.
 - `encode_submit`: CPU-side command recording and queue submit time.
 - `sync_readback`: blocking wait at `wgpu_buffer_map_sync`. This includes waiting for GPU completion, buffer copies, mapping, and browser/WASM synchronization overhead.
 - `gpu_*`: GPU timestamp-query measurements for actual compute passes.
@@ -234,7 +252,7 @@ Meaning:
 So this is expected:
 
 ```text
-inference ~= encode_submit + sync_readback + small CPU bookkeeping
+inference ~= input_convert/input_generation + upload + encode_submit + sync_readback + small CPU bookkeeping
 ```
 
 Do not add `sync_readback + gpu_total`; that double-counts the GPU compute time.

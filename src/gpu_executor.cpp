@@ -161,10 +161,15 @@ int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
         return -1;
     }
 
+    const auto input_start = Clock::now();
     std::vector<float> input = makeSyntheticInput(input_seed);
+    const auto input_end = Clock::now();
+
+    const auto upload_start = Clock::now();
+    wgpu_queue_write_buffer(queue_, large_input_buffer_, 0, input.data(), input.size() * sizeof(float));
+    const auto upload_end = Clock::now();
 
     const auto submit_start = Clock::now();
-    wgpu_queue_write_buffer(queue_, large_input_buffer_, 0, input.data(), input.size() * sizeof(float));
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device_, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
 
     WGpuComputePassDescriptor conv_pass_desc = timestampPassDescriptor(large_timestamp_query_set_, 0, 1);
@@ -232,6 +237,8 @@ int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
     inference_pending_ = true;
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
     pending_encode_submit_ms_ = elapsedMs(submit_start, submit_end);
+    pending_input_ms_ = elapsedMs(input_start, input_end);
+    pending_upload_ms_ = elapsedMs(upload_start, upload_end);
     pending_sync_start_ms_ = nowMs();
     pending_kind_ = 2;
     wgpu_buffer_map_async(
@@ -261,7 +268,9 @@ int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
     latest_prediction_ = argmax(logits);
     inference_pending_ = false;
     std::cout << "[timing] synthetic_gpu_large_detail"
-              << " encode_submit=" << elapsedMs(submit_start, submit_end)
+              << " input_generation=" << elapsedMs(input_start, input_end)
+              << "ms upload=" << elapsedMs(upload_start, upload_end)
+              << "ms encode_submit=" << elapsedMs(submit_start, submit_end)
               << "ms sync_readback=" << elapsedMs(sync_start, sync_end)
               << "ms";
     if (timestamp_query_enabled_) {
@@ -299,12 +308,16 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
         return -1;
     }
 
+    const auto input_start = Clock::now();
     std::array<float, INPUT_VALUES> input{};
     for (std::size_t i = 0; i < image.size(); ++i) {
         input[i] = static_cast<float>(image[i]) / 255.0f;
     }
+    const auto input_end = Clock::now();
 
+    const auto upload_start = Clock::now();
     wgpu_queue_write_buffer(queue_, input_buffer_, 0, input.data(), input.size() * sizeof(float));
+    const auto upload_end = Clock::now();
 
     const auto submit_start = Clock::now();
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(device_, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
@@ -364,6 +377,8 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     inference_pending_ = true;
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
     pending_encode_submit_ms_ = elapsedMs(submit_start, submit_end);
+    pending_input_ms_ = elapsedMs(input_start, input_end);
+    pending_upload_ms_ = elapsedMs(upload_start, upload_end);
     pending_sync_start_ms_ = nowMs();
     pending_kind_ = 1;
     wgpu_buffer_map_async(
@@ -393,7 +408,9 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     latest_prediction_ = argmax(logits);
     inference_pending_ = false;
     std::cout << "[timing] gpu_detail"
-              << " encode_submit=" << elapsedMs(submit_start, submit_end)
+              << " input_convert=" << elapsedMs(input_start, input_end)
+              << "ms upload=" << elapsedMs(upload_start, upload_end)
+              << "ms encode_submit=" << elapsedMs(submit_start, submit_end)
               << "ms sync_readback=" << elapsedMs(sync_start, sync_end)
               << "ms";
     if (timestamp_query_enabled_) {
@@ -420,6 +437,28 @@ void GpuExecutor::prepareSyntheticLarge() {
     if (webgpu_ready_) {
         createLargeNetworkResources();
     }
+#endif
+}
+
+void GpuExecutor::prepareSyntheticLargeData() {
+#ifdef __EMSCRIPTEN__
+    if (large_synthetic_data_ready_) {
+        return;
+    }
+
+    const auto start = Clock::now();
+    uint32_t state = 0x12345678u;
+    large_conv_weights_data_ = makeSyntheticValues(LARGE_CONV_WEIGHT_VALUES, state, 0.05f);
+    large_conv_bias_data_ = makeSyntheticValues(4, state, 0.01f);
+    large_linear_weights_data_ = makeSyntheticValues(LARGE_LINEAR_WEIGHT_VALUES, state, 0.005f);
+    large_linear_bias_data_ = makeSyntheticValues(LOGIT_VALUES, state, 0.01f);
+    large_synthetic_data_ready_ = true;
+    const auto end = Clock::now();
+
+    std::cout << "[timing] synthetic_gpu_large_data_prepare"
+              << " elapsed=" << elapsedMs(start, end)
+              << "ms"
+              << std::endl;
 #endif
 }
 
@@ -505,7 +544,9 @@ void GpuExecutor::finishTinyAsyncReadback() {
 
     const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
     std::cout << "[timing] gpu_detail"
-              << " encode_submit=" << pending_encode_submit_ms_
+              << " input_convert=" << pending_input_ms_
+              << "ms upload=" << pending_upload_ms_
+              << "ms encode_submit=" << pending_encode_submit_ms_
               << "ms sync_readback=" << sync_readback_ms
               << "ms gpu_timestamp=unavailable"
               << std::endl;
@@ -522,7 +563,9 @@ void GpuExecutor::finishTinyAsyncTimestamp() {
     const double linear_ms = timestampDeltaMs(timestamps[2], timestamps[3]);
     const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
     std::cout << "[timing] gpu_detail"
-              << " encode_submit=" << pending_encode_submit_ms_
+              << " input_convert=" << pending_input_ms_
+              << "ms upload=" << pending_upload_ms_
+              << "ms encode_submit=" << pending_encode_submit_ms_
               << "ms sync_readback=" << sync_readback_ms
               << "ms gpu_conv=" << conv_ms
               << "ms gpu_linear=" << linear_ms
@@ -553,7 +596,9 @@ void GpuExecutor::finishLargeAsyncReadback() {
 
     const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
     std::cout << "[timing] synthetic_gpu_large_detail"
-              << " encode_submit=" << pending_encode_submit_ms_
+              << " input_generation=" << pending_input_ms_
+              << "ms upload=" << pending_upload_ms_
+              << "ms encode_submit=" << pending_encode_submit_ms_
               << "ms sync_readback=" << sync_readback_ms
               << "ms gpu_timestamp=unavailable"
               << std::endl;
@@ -571,7 +616,9 @@ void GpuExecutor::finishLargeAsyncTimestamp() {
     const double reduce_ms = timestampDeltaMs(timestamps[4], timestamps[5]);
     const double sync_readback_ms = nowMs() - pending_sync_start_ms_;
     std::cout << "[timing] synthetic_gpu_large_detail"
-              << " encode_submit=" << pending_encode_submit_ms_
+              << " input_generation=" << pending_input_ms_
+              << "ms upload=" << pending_upload_ms_
+              << "ms encode_submit=" << pending_encode_submit_ms_
               << "ms sync_readback=" << sync_readback_ms
               << "ms gpu_conv=" << conv_ms
               << "ms gpu_linear_partial=" << partial_ms
@@ -728,7 +775,12 @@ void GpuExecutor::createLargeNetworkResources() {
     if (!device_ || !queue_) {
         return;
     }
+    prepareSyntheticLargeData();
+    if (!large_synthetic_data_ready_) {
+        return;
+    }
 
+    const auto total_start = Clock::now();
     const uint64_t input_size = LARGE_INPUT_VALUES * sizeof(float);
     const uint64_t conv_weights_size = LARGE_CONV_WEIGHT_VALUES * sizeof(float);
     const uint64_t conv_bias_size = 4 * sizeof(float);
@@ -748,6 +800,7 @@ void GpuExecutor::createLargeNetworkResources() {
     large_partial_sums_buffer_ = createBuffer(partial_sums_size, WGPU_BUFFER_USAGE_STORAGE);
     large_logits_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC);
     large_readback_buffer_ = createBuffer(logits_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    const auto buffers_end = Clock::now();
     if (timestamp_query_enabled_) {
         WGpuQuerySetDescriptor timestamp_desc = {};
         timestamp_desc.type = WGPU_QUERY_TYPE_TIMESTAMP;
@@ -756,24 +809,15 @@ void GpuExecutor::createLargeNetworkResources() {
         large_timestamp_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_QUERY_RESOLVE | WGPU_BUFFER_USAGE_COPY_SRC);
         large_timestamp_readback_buffer_ = createBuffer(timestamp_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
     }
+    const auto timestamp_end = Clock::now();
 
-    uint32_t state = 0x12345678u;
-    {
-        std::vector<float> values = makeSyntheticValues(LARGE_CONV_WEIGHT_VALUES, state, 0.05f);
-        wgpu_queue_write_buffer(queue_, large_conv_weights_buffer_, 0, values.data(), conv_weights_size);
-    }
-    {
-        std::vector<float> values = makeSyntheticValues(4, state, 0.01f);
-        wgpu_queue_write_buffer(queue_, large_conv_bias_buffer_, 0, values.data(), conv_bias_size);
-    }
-    {
-        std::vector<float> values = makeSyntheticValues(LARGE_LINEAR_WEIGHT_VALUES, state, 0.005f);
-        wgpu_queue_write_buffer(queue_, large_linear_weights_buffer_, 0, values.data(), linear_weights_size);
-    }
-    {
-        std::vector<float> values = makeSyntheticValues(LOGIT_VALUES, state, 0.01f);
-        wgpu_queue_write_buffer(queue_, large_linear_bias_buffer_, 0, values.data(), linear_bias_size);
-    }
+    const auto prepare_synth_data = Clock::now();
+
+    wgpu_queue_write_buffer(queue_, large_conv_weights_buffer_, 0, large_conv_weights_data_.data(), conv_weights_size);
+    wgpu_queue_write_buffer(queue_, large_conv_bias_buffer_, 0, large_conv_bias_data_.data(), conv_bias_size);
+    wgpu_queue_write_buffer(queue_, large_linear_weights_buffer_, 0, large_linear_weights_data_.data(), linear_weights_size);
+    wgpu_queue_write_buffer(queue_, large_linear_bias_buffer_, 0, large_linear_bias_data_.data(), linear_bias_size);
+    const auto data_upload_end = Clock::now();
 
     WGpuBindGroupLayoutEntry conv_layout_entries[4] = {
         storageLayoutEntry(0, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, input_size),
@@ -799,6 +843,7 @@ void GpuExecutor::createLargeNetworkResources() {
     };
     large_linear_reduce_bind_group_layout_ = wgpu_device_create_bind_group_layout(device_, reduce_layout_entries, 3);
     large_linear_reduce_pipeline_layout_ = wgpu_device_create_pipeline_layout(device_, &large_linear_reduce_bind_group_layout_, 1);
+    const auto layouts_end = Clock::now();
 
     WGpuShaderModuleDescriptor conv_shader_desc = {};
     conv_shader_desc.code = internal::LARGE_CONV_RELU_WGSL;
@@ -819,6 +864,7 @@ void GpuExecutor::createLargeNetworkResources() {
     wgpu_object_destroy(conv_shader);
     wgpu_object_destroy(partial_shader);
     wgpu_object_destroy(reduce_shader);
+    const auto pipelines_end = Clock::now();
 
     WGpuBindGroupEntry conv_entries[4] = {
         bufferEntry(0, large_input_buffer_, input_size),
@@ -849,9 +895,30 @@ void GpuExecutor::createLargeNetworkResources() {
         large_conv_bind_group_ &&
         large_linear_partial_bind_group_ &&
         large_linear_reduce_bind_group_;
+    const auto resources_end = Clock::now();
 
     if (large_network_ready_) {
         std::cout << "wasm_webgpu synthetic large resources ready" << std::endl;
+        std::cout << "[timing] synthetic_gpu_large_resource_detail"
+                  << " buffers=" << elapsedMs(total_start, buffers_end)
+                  << "ms timestamp=" << elapsedMs(buffers_end, timestamp_end)
+                  << "ms synth_data=" << elapsedMs(timestamp_end, prepare_synth_data)
+                  << "ms data_upload=" << elapsedMs(prepare_synth_data, data_upload_end)
+                  << "ms layouts=" << elapsedMs(data_upload_end, layouts_end)
+                  << "ms pipelines=" << elapsedMs(layouts_end, pipelines_end)
+                  << "ms bind_groups=" << elapsedMs(pipelines_end, resources_end)
+                  << "ms total=" << elapsedMs(total_start, resources_end)
+                  << "ms"
+                  << std::endl;
+
+        large_conv_weights_data_.clear();
+        large_conv_bias_data_.clear();
+        large_linear_weights_data_.clear();
+        large_linear_bias_data_.clear();
+        large_conv_weights_data_.shrink_to_fit();
+        large_conv_bias_data_.shrink_to_fit();
+        large_linear_weights_data_.shrink_to_fit();
+        large_linear_bias_data_.shrink_to_fit();
     } else {
         std::cerr << "Failed to create wasm_webgpu synthetic large resources" << std::endl;
     }

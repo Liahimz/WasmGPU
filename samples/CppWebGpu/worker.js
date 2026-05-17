@@ -12,6 +12,7 @@ let readyPromise = SmartIDEngine({
 }).then((Module) => {
   engineInstance = new Module.GpuEngine();
   engineInstance.configure(28);
+  engineInstance.prepareSyntheticLargeData();
   moduleObject = Module;
   return Module;
 });
