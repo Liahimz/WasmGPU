@@ -82,7 +82,12 @@ add_custom_command(
 set(WASM_GPU_ENGINE_SOURCE src/wasm_gpu_engine.cpp)
 set(WASM_GPU_ENGINE_DEFINE BUILD_WASM_WEBGPU_ENGINE)
 set(WASM_GPU_ENGINE_EXTRA_DEFINES)
-set(WASM_GPU_MODEL_SOURCES src/model_loader.cpp src/wgsl_generator.cpp)
+set(WASM_GPU_MODEL_SOURCES
+    src/model_loader.cpp
+    src/wgsl_generator.cpp
+    src/cpu_graph_executor.cpp
+    src/webgpu_graph_executor.cpp
+)
 set(WASM_GPU_EXTRA_SOURCES src/gpu_executor.cpp src/cpp_executor.cpp ${EMBEDDED_SHADER_HEADER})
 set(WASM_GPU_USE_WASM_WEBGPU ON)
 set(WASM_GPU_USE_EMDAWN_WEBGPU OFF)

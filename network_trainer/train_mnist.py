@@ -170,7 +170,7 @@ def export_weights(model, out_dir):
                 "stride": [1, 1],
                 "padding": [0, 0],
                 "weights": paths["conv_weights"].name,
-                "weights_shape": [4, 3, 3],
+                "weights_shape": [4, 1, 3, 3],
                 "bias": paths["conv_bias"].name,
                 "bias_shape": [4],
             },

@@ -37,10 +37,12 @@ onmessage = async function(msg) {
       const resultVec = await engineInstance.process(cppVec, width, height, channels);
       const prediction = resultVec.prediction;
 
+      const cpuGraphResult = engineInstance.processCpuGraph(cppVec, width, height, channels);
       const cpuScalarResult = engineInstance.processCpu(cppVec, width, height, channels, 0);
       const cpuSimdResult = engineInstance.processCpu(cppVec, width, height, channels, 1);
       const cpuSimdThreadsResult = engineInstance.processCpu(cppVec, width, height, channels, 2);
       const cpuPredictions = {
+        graph: cpuGraphResult.prediction,
         scalar: cpuScalarResult.prediction,
         simd: cpuSimdResult.prediction,
         simdThreads: cpuSimdThreadsResult.prediction,

@@ -151,6 +151,7 @@ onmessage = async function(msg) {
 
       const runs = {
         gpu: [],
+        cpuGraph: [],
         cpuScalar: [],
         cpuSimd: [],
         cpuSimdThreads: [],
@@ -187,6 +188,11 @@ onmessage = async function(msg) {
         runs.gpu.push(gpuRun);
         prediction = gpuRun.prediction;
 
+        const cpuGraphRun = timedCpuRun("cpu_graph", run, cacheScrub, () =>
+          engineInstance.processCpuGraph(cppVec, width, height, channels)
+        );
+        runs.cpuGraph.push(cpuGraphRun);
+
         const cpuScalarRun = timedCpuRun("cpu_scalar", run, cacheScrub, () =>
           engineInstance.processCpu(cppVec, width, height, channels, 0)
         );
@@ -202,6 +208,7 @@ onmessage = async function(msg) {
         );
         runs.cpuSimdThreads.push(cpuSimdThreadsRun);
         cpuPredictions = {
+          graph: cpuGraphRun.prediction,
           scalar: cpuScalarRun.prediction,
           simd: cpuSimdRun.prediction,
           simdThreads: cpuSimdThreadsRun.prediction,
@@ -236,6 +243,7 @@ onmessage = async function(msg) {
 
       const benchmarkStats = [
         summarizeRuns("gpu", runs.gpu),
+        summarizeRuns("cpu_graph", runs.cpuGraph),
         summarizeRuns("cpu_scalar", runs.cpuScalar),
         summarizeRuns("cpu_simd", runs.cpuSimd),
         summarizeRuns("cpu_simd_threads", runs.cpuSimdThreads),

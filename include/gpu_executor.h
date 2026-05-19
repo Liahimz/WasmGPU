@@ -1,6 +1,8 @@
 #pragma once
 
+#include "model_loader.h"
 #include "network_weights.h"
+#include "webgpu_graph_executor.h"
 
 #include <cstdint>
 #include <cstddef>
@@ -18,6 +20,7 @@ public:
     ~GpuExecutor();
 
     void configure(const network::TinyLenetWeights* weights);
+    void configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights);
     bool ready() const;
     int infer(const std::vector<uint8_t>& image);
     void prepareSyntheticLargeData();
@@ -28,6 +31,8 @@ public:
 
 private:
     const network::TinyLenetWeights* weights_ = nullptr;
+    const network::ModelDesc* model_ = nullptr;
+    network::WebGpuGraphExecutor graph_;
     bool webgpu_requested_ = false;
     bool webgpu_ready_ = false;
     bool network_ready_ = false;

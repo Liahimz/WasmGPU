@@ -102,6 +102,7 @@ GpuExecutor::GpuExecutor() = default;
 
 GpuExecutor::~GpuExecutor() {
 #ifdef __EMSCRIPTEN__
+    graph_.reset();
     wgpu_object_destroy(readback_buffer_);
     wgpu_object_destroy(timestamp_readback_buffer_);
     wgpu_object_destroy(timestamp_buffer_);
@@ -294,7 +295,15 @@ int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
 }
 
 void GpuExecutor::configure(const network::TinyLenetWeights* weights) {
+    configure(nullptr, weights);
+}
+
+void GpuExecutor::configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights) {
+    model_ = model;
     weights_ = weights;
+    if (model_ && !graph_.configure(*model_)) {
+        std::cerr << "Failed to configure WebGPU graph executor: " << graph_.error() << std::endl;
+    }
     requestWebGpuDevice();
 }
 
@@ -304,6 +313,20 @@ bool GpuExecutor::ready() const {
 
 int GpuExecutor::infer(const std::vector<uint8_t>& image) {
 #ifdef __EMSCRIPTEN__
+#if !defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+    if (graph_.ready()) {
+        const auto inference_start = Clock::now();
+        latest_prediction_ = graph_.inferClassBytes(image);
+        const auto inference_end = Clock::now();
+        inference_pending_ = false;
+        std::cout << "[timing] gpu_graph_detail"
+                  << " inference=" << elapsedMs(inference_start, inference_end)
+                  << "ms prediction=" << latest_prediction_
+                  << std::endl;
+        return latest_prediction_;
+    }
+#endif
+
     if (!ready() || !weights_ || !weights_->valid() || image.size() != INPUT_VALUES) {
         return -1;
     }
@@ -687,6 +710,19 @@ void GpuExecutor::createNetworkResources() {
     if (network_ready_) {
         return;
     }
+#if !defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+    if (model_ && model_->valid() && device_ && queue_) {
+        if (graph_.attach(device_, queue_) && graph_.prepare()) {
+            network_ready_ = true;
+            std::cout << "wasm_webgpu graph resources ready for " << model_->name << std::endl;
+            return;
+        }
+        std::cerr << "Failed to create wasm_webgpu graph resources: " << graph_.error()
+                  << "; falling back to fixed tiny_lenet resources"
+                  << std::endl;
+    }
+#endif
+
     if (!weights_ || !weights_->valid() || !device_ || !queue_) {
         return;
     }

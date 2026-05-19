@@ -171,6 +171,11 @@ GpuExecutor::~GpuExecutor() {
 }
 
 void GpuExecutor::configure(const network::TinyLenetWeights* weights) {
+    configure(nullptr, weights);
+}
+
+void GpuExecutor::configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights) {
+    model_ = model;
     weights_ = weights;
     requestWebGpuDevice();
 }
@@ -924,6 +929,7 @@ void GpuExecutor::finishLargeAsyncTimestamp() {
 GpuExecutor::GpuExecutor() = default;
 GpuExecutor::~GpuExecutor() = default;
 void GpuExecutor::configure(const network::TinyLenetWeights*) {}
+void GpuExecutor::configure(const network::ModelDesc*, const network::TinyLenetWeights*) {}
 bool GpuExecutor::ready() const { return false; }
 int GpuExecutor::infer(const std::vector<uint8_t>&) { return -1; }
 void GpuExecutor::prepareSyntheticLargeData() {}
