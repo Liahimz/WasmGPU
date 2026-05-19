@@ -6,6 +6,7 @@ This folder trains the tiny network used by the WebGPU demo:
 input:  28x28x1
 conv:   4 filters, 3x3, stride 1, no padding
 relu:   26x26x4
+flatten
 linear: 2704 -> 10
 ```
 
@@ -27,3 +28,4 @@ network_data/tiny_lenet_weights.npz
 ```
 
 The raw `.bin` files are little-endian `float32`, flattened in the same order expected by the WGSL shaders.
+The manifest is static-shape and names each layer so the generic model loader can prepare CPU/WebGPU executor plans from the same exported data.

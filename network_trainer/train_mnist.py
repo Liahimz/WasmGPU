@@ -162,6 +162,7 @@ def export_weights(model, out_dir):
         "input_shape": [1, 28, 28],
         "layers": [
             {
+                "name": "conv0",
                 "type": "conv2d",
                 "in_channels": 1,
                 "out_channels": 4,
@@ -174,10 +175,16 @@ def export_weights(model, out_dir):
                 "bias_shape": [4],
             },
             {
+                "name": "relu0",
                 "type": "relu",
                 "shape": [4, 26, 26],
             },
             {
+                "name": "flatten0",
+                "type": "flatten",
+            },
+            {
+                "name": "linear0",
                 "type": "linear",
                 "in_features": 2704,
                 "out_features": 10,
