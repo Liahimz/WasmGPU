@@ -41,6 +41,16 @@ python3 ./build.py --mode js-webgpu
 python3 ./build.py --mode dummy
 ```
 
+CPU threaded paths use `wasm-thread` by default. You can switch the backend at build time:
+
+```bash
+python3 ./build.py --parallel-backend wasm-thread
+python3 ./build.py --parallel-backend pthread
+python3 ./build.py --parallel-backend std-thread
+python3 ./build.py --parallel-backend tbb
+python3 ./build.py --parallel-backend serial
+```
+
 For `cpp-webgpu-dawn`, Closure is disabled by default because the current Emscripten/Dawn combo can fail Closure on generated exception glue. To force it, add `--emdawn-closure`.
 
 The script writes the runnable site into `build/`.
@@ -270,9 +280,11 @@ Do not add `sync_readback + gpu_total`; that double-counts the GPU compute time.
 | --- | --- | --- |
 | `0` | `scalar` | Plain CPU loops. |
 | `1` | `simd` | SIMD dot products for the linear layer when WASM SIMD is enabled. |
-| `2` | `simd_threads` | Threaded convolution plus SIMD linear layer. |
+| `2` | `simd_threads` | Parallel convolution plus SIMD linear layer. |
 
-The project currently builds with pthreads and WASM SIMD enabled in `cpp-webgpu` mode.
+The parallel backend is selected at build time with `--parallel-backend`. `wasm-thread` is the default for browser/WASM builds; `tbb`, `pthread`, `std-thread`, and `serial` are available for comparisons.
+
+Threaded CPU work goes through `thread_tools/parallel_utils.h`, which exposes `parallel::TaskGroup` and `parallel::parallelFor(...)`. TBB builds map those calls to TBB primitives; non-TBB builds use the local custom thread pool in `thread_tools/thread_pool.hpp`.
 
 ## Notes On WebGPU Synchronization
 

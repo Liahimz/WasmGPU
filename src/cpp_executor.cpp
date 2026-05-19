@@ -1,10 +1,10 @@
 #include "cpp_executor.h"
+#include "thread_tools/parallel_utils.h"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <limits>
-#include <pthread.h>
 
 #if defined(__wasm_simd128__)
 #include <wasm_simd128.h>
@@ -89,19 +89,6 @@ void computeConvChannel(
     }
 }
 
-struct ConvThreadArgs {
-    const float* input = nullptr;
-    const network::TinyLenetWeights* weights = nullptr;
-    float* conv_output = nullptr;
-    int channel = 0;
-};
-
-void* convThreadMain(void* user_data) {
-    auto* args = static_cast<ConvThreadArgs*>(user_data);
-    computeConvChannel(args->input, *args->weights, args->conv_output, args->channel);
-    return nullptr;
-}
-
 void computeConvScalar(
     const float* input,
     const network::TinyLenetWeights& weights,
@@ -117,27 +104,9 @@ void computeConvThreaded(
     const network::TinyLenetWeights& weights,
     float* conv_output
 ) {
-    std::array<pthread_t, ConvChannels> threads{};
-    std::array<ConvThreadArgs, ConvChannels> args{};
-    std::array<bool, ConvChannels> started{};
-
-    for (int channel = 0; channel < ConvChannels; ++channel) {
-        args[channel].input = input;
-        args[channel].weights = &weights;
-        args[channel].conv_output = conv_output;
-        args[channel].channel = channel;
-
-        started[channel] = pthread_create(&threads[channel], nullptr, convThreadMain, &args[channel]) == 0;
-        if (!started[channel]) {
-            computeConvChannel(input, weights, conv_output, channel);
-        }
-    }
-
-    for (int channel = 0; channel < ConvChannels; ++channel) {
-        if (started[channel]) {
-            pthread_join(threads[channel], nullptr);
-        }
-    }
+    parallel::parallelFor(0, ConvChannels, [&](std::size_t channel) {
+        computeConvChannel(input, weights, conv_output, static_cast<int>(channel));
+    });
 }
 
 std::array<float, LogitValues> computeLinear(
@@ -239,19 +208,6 @@ void computeLargeConvChannel(
     }
 }
 
-struct LargeConvThreadArgs {
-    const float* input = nullptr;
-    const LargeSyntheticNetwork* network = nullptr;
-    float* conv_output = nullptr;
-    int channel = 0;
-};
-
-void* largeConvThreadMain(void* user_data) {
-    auto* args = static_cast<LargeConvThreadArgs*>(user_data);
-    computeLargeConvChannel(args->input, *args->network, args->conv_output, args->channel);
-    return nullptr;
-}
-
 void computeLargeConvScalar(const float* input, const LargeSyntheticNetwork& network, float* conv_output) {
     for (int channel = 0; channel < LargeChannels; ++channel) {
         computeLargeConvChannel(input, network, conv_output, channel);
@@ -259,27 +215,9 @@ void computeLargeConvScalar(const float* input, const LargeSyntheticNetwork& net
 }
 
 void computeLargeConvThreaded(const float* input, const LargeSyntheticNetwork& network, float* conv_output) {
-    std::array<pthread_t, LargeChannels> threads{};
-    std::array<LargeConvThreadArgs, LargeChannels> args{};
-    std::array<bool, LargeChannels> started{};
-
-    for (int channel = 0; channel < LargeChannels; ++channel) {
-        args[channel].input = input;
-        args[channel].network = &network;
-        args[channel].conv_output = conv_output;
-        args[channel].channel = channel;
-
-        started[channel] = pthread_create(&threads[channel], nullptr, largeConvThreadMain, &args[channel]) == 0;
-        if (!started[channel]) {
-            computeLargeConvChannel(input, network, conv_output, channel);
-        }
-    }
-
-    for (int channel = 0; channel < LargeChannels; ++channel) {
-        if (started[channel]) {
-            pthread_join(threads[channel], nullptr);
-        }
-    }
+    parallel::parallelFor(0, LargeChannels, [&](std::size_t channel) {
+        computeLargeConvChannel(input, network, conv_output, static_cast<int>(channel));
+    });
 }
 
 std::array<float, LogitValues> computeLargeLinear(

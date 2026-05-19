@@ -6,9 +6,10 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(WASM_GPU_BUILD_MODE "cpp-webgpu" CACHE STRING "Build mode: cpp-webgpu, cpp-webgpu-async, cpp-webgpu-dawn, js-webgpu, or dummy")
 set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu cpp-webgpu-async cpp-webgpu-dawn js-webgpu dummy)
+set(WASM_GPU_PARALLEL_BACKEND "wasm-thread" CACHE STRING "Parallel backend: wasm-thread, pthread, std-thread, tbb, or serial")
+set_property(CACHE WASM_GPU_PARALLEL_BACKEND PROPERTY STRINGS wasm-thread pthread std-thread tbb serial)
 
 set(TBB_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/tbb)
-include_directories(${TBB_ROOT}/include)
 set(WASM_WEBGPU_ROOT ${CMAKE_SOURCE_DIR}/thirdparty/wasm_webgpu)
 set(WASM_WEBGPU_LIB_DIR ${WASM_WEBGPU_ROOT}/lib)
 set(BUILD_SCRIPTS_DIR ${CMAKE_SOURCE_DIR}/build_scripts)
@@ -21,21 +22,18 @@ set(EMBEDDED_SHADER_HEADER ${CMAKE_CURRENT_BINARY_DIR}/src/embedded_shaders.h)
 # set(TBB_LIB_DIR ${CMAKE_SOURCE_DIR}/thirdparty/tbb/build-emscripten/clang_20.0_cxx11_32_release)
 # link_directories(${TBB_LIB_DIR})
 
-# Set base directory
-set(TBB_BUILD_BASE "${CMAKE_SOURCE_DIR}/thirdparty/tbb/build-emscripten")
+if(WASM_GPU_PARALLEL_BACKEND STREQUAL "tbb")
+    set(TBB_BUILD_BASE "${CMAKE_SOURCE_DIR}/thirdparty/tbb/build-emscripten")
+    file(GLOB TBB_BUILD_DIRS "${TBB_BUILD_BASE}/clang_*")
 
-# Glob for the correct build output dir (matches any clang version)
-file(GLOB TBB_BUILD_DIRS "${TBB_BUILD_BASE}/clang_*")
+    list(LENGTH TBB_BUILD_DIRS _tbb_dir_count)
+    if(_tbb_dir_count EQUAL 0)
+        message(FATAL_ERROR "No TBB build directory found in ${TBB_BUILD_BASE}")
+    endif()
 
-list(LENGTH TBB_BUILD_DIRS _tbb_dir_count)
-if(_tbb_dir_count EQUAL 0)
-    message(FATAL_ERROR "No TBB build directory found in ${TBB_BUILD_BASE}")
+    list(GET TBB_BUILD_DIRS 0 TBB_LIB_DIR)
+    message(STATUS "Using TBB library dir: ${TBB_LIB_DIR}")
 endif()
-
-# Use the first one found (if multiple: pick latest or warn)
-list(GET TBB_BUILD_DIRS 0 TBB_LIB_DIR)
-
-message(STATUS "Using TBB library dir: ${TBB_LIB_DIR}")
 
 
 
@@ -117,13 +115,16 @@ elseif(NOT WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu")
 endif()
 
 message(STATUS "WASM GPU build mode: ${WASM_GPU_BUILD_MODE}")
+message(STATUS "WASM GPU parallel backend: ${WASM_GPU_PARALLEL_BACKEND}")
 
 add_executable(wasm_gpu
     ${WASM_GPU_ENGINE_SOURCE}
     ${WASM_GPU_EXTRA_SOURCES}
     src/bindings.cpp
     src/network_weights.cpp
-    src/parallel_tools.cpp
+    src/thread_tools/parallel_tools.cpp
+    src/thread_tools/parallel_utils.cpp
+    src/thread_tools/thread_pool.cpp
     ${EMBEDDED_DATA_HEADER}
 )
 
@@ -145,7 +146,22 @@ add_executable(wasm_gpu
 # add_link_options(-O3)
 # add_link_options(-lembind)
 
-target_link_libraries(wasm_gpu PRIVATE ${TBB_LIB_DIR}/libtbb.a embind)
+target_link_libraries(wasm_gpu PRIVATE embind)
+if(WASM_GPU_PARALLEL_BACKEND STREQUAL "tbb")
+    target_include_directories(wasm_gpu PRIVATE ${TBB_ROOT}/include)
+    target_link_libraries(wasm_gpu PRIVATE ${TBB_LIB_DIR}/libtbb.a)
+    target_compile_definitions(wasm_gpu PRIVATE WASM_GPU_PARALLEL_BACKEND_TBB)
+elseif(WASM_GPU_PARALLEL_BACKEND STREQUAL "wasm-thread")
+    target_compile_definitions(wasm_gpu PRIVATE WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+elseif(WASM_GPU_PARALLEL_BACKEND STREQUAL "pthread")
+    target_compile_definitions(wasm_gpu PRIVATE WASM_GPU_PARALLEL_BACKEND_PTHREAD)
+elseif(WASM_GPU_PARALLEL_BACKEND STREQUAL "std-thread")
+    target_compile_definitions(wasm_gpu PRIVATE WASM_GPU_PARALLEL_BACKEND_STD_THREAD)
+elseif(WASM_GPU_PARALLEL_BACKEND STREQUAL "serial")
+    target_compile_definitions(wasm_gpu PRIVATE WASM_GPU_PARALLEL_BACKEND_SERIAL)
+else()
+    message(FATAL_ERROR "Unknown WASM_GPU_PARALLEL_BACKEND='${WASM_GPU_PARALLEL_BACKEND}'. Use wasm-thread, pthread, std-thread, tbb, or serial.")
+endif()
 
 target_include_directories(wasm_gpu PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src)
 target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
@@ -183,7 +199,7 @@ if(WASM_GPU_USE_EMDAWN_WEBGPU)
     endif()
 endif()
 
-set(WASM_GPU_LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -sENVIRONMENT=worker -sPTHREAD_POOL_SIZE=4 -pthread -lembind -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=PThread -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_keepalive_mainloop,_stop_keepalive_mainloop")
+set(WASM_GPU_LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -sENVIRONMENT=worker -sPTHREAD_POOL_SIZE=4 -pthread -lembind -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=PThread -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_parallel_session,_start_keepalive_mainloop,_stop_keepalive_mainloop")
 if(WASM_GPU_USE_JSPI)
     set(WASM_GPU_LINK_FLAGS "${WASM_GPU_LINK_FLAGS} -sJSPI -Wno-experimental")
 endif()

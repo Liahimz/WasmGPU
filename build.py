@@ -91,6 +91,12 @@ def parse_args():
         action="store_true",
         help="Enable Closure compiler for cpp-webgpu-dawn.",
     )
+    parser.add_argument(
+        "--parallel-backend",
+        choices=["wasm-thread", "pthread", "std-thread", "tbb", "serial"],
+        default=os.environ.get("WASM_GPU_PARALLEL_BACKEND", "wasm-thread"),
+        help="CPU parallel backend. Default: wasm-thread.",
+    )
     return parser.parse_args()
 
 
@@ -99,9 +105,10 @@ def main():
     sample_dir = BUILD_MODES[args.mode]
     print(f"Build mode: {args.mode}")
     print(f"Sample dir: {sample_dir}")
+    print(f"Parallel backend: {args.parallel_backend}")
 
-    #build tbb for emiscripten
-    check_and_build_tbb()
+    if args.parallel_backend == "tbb":
+        check_and_build_tbb()
     
     # Clean build output without deleting the directory itself. This keeps
     # terminals already inside build/ from ending up with a removed cwd.
@@ -115,7 +122,13 @@ def main():
     os.makedirs(CMAKE_BUILD)
 
     # Configure and build with Emscripten
-    cmake_configure = ["emcmake", "cmake", "..", f"-DWASM_GPU_BUILD_MODE={args.mode}"]
+    cmake_configure = [
+        "emcmake",
+        "cmake",
+        "..",
+        f"-DWASM_GPU_BUILD_MODE={args.mode}",
+        f"-DWASM_GPU_PARALLEL_BACKEND={args.parallel_backend}",
+    ]
     if args.mode == "cpp-webgpu-dawn":
         if args.emdawn_port:
             cmake_configure.append(f"-DWASM_GPU_EMDAWN_PORT={args.emdawn_port}")
