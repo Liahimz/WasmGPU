@@ -16,7 +16,7 @@ ThreadPool::ThreadPool(std::size_t max_concurrency) {
         queues_.push_back(std::unique_ptr<detail::WorkStealingQueue>(new detail::WorkStealingQueue()));
     }
 
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
     threads_.resize(thread_count);
     for (std::size_t index = 0; index < thread_count; ++index) {
         auto* args = new std::pair<ThreadPool*, std::size_t>(this, index);
@@ -44,7 +44,7 @@ ThreadPool::ThreadPool(std::size_t max_concurrency) {
 ThreadPool::~ThreadPool() {
     done_.store(true);
 
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
     for (pthread_t& thread : threads_) {
         pthread_join(thread, nullptr);
     }
@@ -57,7 +57,7 @@ ThreadPool::~ThreadPool() {
 #endif
 }
 
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
 void* ThreadPool::pthreadWorkerMain(void* user_data) {
     auto* args = static_cast<std::pair<ThreadPool*, std::size_t>*>(user_data);
     ThreadPool* pool = args->first;
@@ -132,7 +132,7 @@ void ThreadPool::runPendingTask() {
 }
 
 std::size_t ThreadPool::maxConcurrency() const {
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD) || defined(WASM_GPU_PARALLEL_BACKEND_STD_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_STD_THREAD)
     return threads_.empty() ? 1 : threads_.size();
 #else
     return 1;

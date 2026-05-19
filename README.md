@@ -284,7 +284,7 @@ Do not add `sync_readback + gpu_total`; that double-counts the GPU compute time.
 
 The parallel backend is selected at build time with `--parallel-backend`. `wasm-thread` is the default for browser/WASM builds; `tbb`, `pthread`, `std-thread`, and `serial` are available for comparisons.
 
-Threaded CPU work goes through `thread_tools/parallel_utils.h`, which exposes `parallel::TaskGroup` and `parallel::parallelFor(...)`. TBB builds map those calls to TBB primitives; non-TBB builds use the local custom thread pool in `thread_tools/thread_pool.hpp`.
+Threaded CPU work goes through `thread_tools/parallel_utils.h`, which exposes `parallel::TaskGroup` and `parallel::parallelFor(...)`. TBB builds map those calls to TBB primitives, `std-thread` and `pthread` builds use the local custom thread pool in `thread_tools/thread_pool.hpp`, and `wasm-thread` builds use Emscripten Wasm Workers from `thread_tools/wasm_worker_pool.h`.
 
 ## Notes On WebGPU Synchronization
 

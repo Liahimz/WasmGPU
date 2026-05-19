@@ -117,14 +117,22 @@ endif()
 message(STATUS "WASM GPU build mode: ${WASM_GPU_BUILD_MODE}")
 message(STATUS "WASM GPU parallel backend: ${WASM_GPU_PARALLEL_BACKEND}")
 
+set(WASM_GPU_THREAD_TOOL_SOURCES
+    src/thread_tools/parallel_tools.cpp
+    src/thread_tools/parallel_utils.cpp
+)
+if(WASM_GPU_PARALLEL_BACKEND STREQUAL "wasm-thread")
+    list(APPEND WASM_GPU_THREAD_TOOL_SOURCES src/thread_tools/wasm_worker_pool.cpp)
+elseif(WASM_GPU_PARALLEL_BACKEND STREQUAL "pthread" OR WASM_GPU_PARALLEL_BACKEND STREQUAL "std-thread")
+    list(APPEND WASM_GPU_THREAD_TOOL_SOURCES src/thread_tools/thread_pool.cpp)
+endif()
+
 add_executable(wasm_gpu
     ${WASM_GPU_ENGINE_SOURCE}
     ${WASM_GPU_EXTRA_SOURCES}
     src/bindings.cpp
     src/network_weights.cpp
-    src/thread_tools/parallel_tools.cpp
-    src/thread_tools/parallel_utils.cpp
-    src/thread_tools/thread_pool.cpp
+    ${WASM_GPU_THREAD_TOOL_SOURCES}
     ${EMBEDDED_DATA_HEADER}
 )
 
@@ -164,7 +172,11 @@ else()
 endif()
 
 target_include_directories(wasm_gpu PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/src)
-target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
+if(WASM_GPU_PARALLEL_BACKEND STREQUAL "wasm-thread")
+    target_compile_options(wasm_gpu PRIVATE -sWASM_WORKERS -pthread -sSHARED_MEMORY=1)
+else()
+    target_compile_options(wasm_gpu PRIVATE -pthread -sSHARED_MEMORY=1)
+endif()
 target_compile_definitions(wasm_gpu PRIVATE ${WASM_GPU_ENGINE_DEFINE} ${WASM_GPU_ENGINE_EXTRA_DEFINES})
 
 if(WASM_GPU_USE_WASM_WEBGPU)
@@ -199,7 +211,12 @@ if(WASM_GPU_USE_EMDAWN_WEBGPU)
     endif()
 endif()
 
-set(WASM_GPU_LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -sENVIRONMENT=worker -sPTHREAD_POOL_SIZE=4 -pthread -lembind -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXIT_RUNTIME=0 -sEXPORTED_RUNTIME_METHODS=PThread -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_parallel_session,_start_keepalive_mainloop,_stop_keepalive_mainloop")
+set(WASM_GPU_LINK_FLAGS "-sMODULARIZE -sEXPORT_NAME=SmartIDEngine -lembind -sEXIT_RUNTIME=0 -sALLOW_MEMORY_GROWTH=1 -O3 -sENVIRONMENT=web,worker -sNO_FILESYSTEM -sNO_USE_SDL -sNO_USE_SDL_MIXER -sDYNAMIC_EXECUTION=1 -sSTACK_SIZE=16mb -sINITIAL_MEMORY=196mb -sNO_ERROR_ON_UNDEFINED_SYMBOLS -sINCOMING_MODULE_JS_API=['locateFile','mainScriptUrlOrBlob','wasmMemory','buffer','instantiateWasm'] -sEXPORTED_FUNCTIONS=_malloc,_free,_start_tbb_session,_start_parallel_session,_start_keepalive_mainloop,_stop_keepalive_mainloop")
+if(WASM_GPU_PARALLEL_BACKEND STREQUAL "wasm-thread")
+    set(WASM_GPU_LINK_FLAGS "${WASM_GPU_LINK_FLAGS} -sWASM_WORKERS -sPTHREAD_POOL_SIZE=4 -pthread -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXPORTED_RUNTIME_METHODS=PThread")
+elseif(NOT WASM_GPU_PARALLEL_BACKEND STREQUAL "serial")
+    set(WASM_GPU_LINK_FLAGS "${WASM_GPU_LINK_FLAGS} -sPTHREAD_POOL_SIZE=4 -pthread -sSHARED_MEMORY=1 -sPTHREADS_DEBUG=1 -sEXPORTED_RUNTIME_METHODS=PThread")
+endif()
 if(WASM_GPU_USE_JSPI)
     set(WASM_GPU_LINK_FLAGS "${WASM_GPU_LINK_FLAGS} -sJSPI -Wno-experimental")
 endif()

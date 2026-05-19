@@ -1,5 +1,6 @@
 #include "wasm_gpu_engine.h"
 #include "image_proc.h"
+#include "thread_tools/parallel_utils.h"
 
 #include <algorithm>
 #include <chrono>
@@ -47,6 +48,7 @@ void WasmGpuEngine::configure(int target_size_) {
 
     gpu_.configure(&weights_);
     cpu_.configure(&weights_);
+    parallel::initialize();
 }
 
 ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width, int height, int channels) {

@@ -13,7 +13,7 @@
 #include <utility>
 #include <vector>
 
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
 #include <pthread.h>
 #endif
 
@@ -194,7 +194,7 @@ public:
     std::size_t maxConcurrency() const;
 
 private:
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
     static void* pthreadWorkerMain(void* user_data);
 #endif
 
@@ -212,7 +212,7 @@ private:
     detail::GlobalTaskQueue pool_work_queue_;
     std::vector<std::unique_ptr<detail::WorkStealingQueue>> queues_;
 
-#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD) || defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+#if defined(WASM_GPU_PARALLEL_BACKEND_PTHREAD)
     std::vector<pthread_t> threads_;
 #elif defined(WASM_GPU_PARALLEL_BACKEND_STD_THREAD)
     std::vector<std::thread> threads_;

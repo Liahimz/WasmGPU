@@ -19,7 +19,9 @@ extern "C" {
 
 void start_parallel_session() {
     parallel::initialize();
+#if !defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
     parallel::warmup();
+#endif
     std::cout << "parallel backend=" << parallel::backendName(parallel::compileBackend())
               << " threads=" << parallel::maxConcurrency()
               << std::endl;
@@ -57,6 +59,10 @@ int TbbInitializer::Initialize(int threads) {
 }
 
 int TbbInitializer::ThreadWarmUp(int threads) {
+#if defined(WASM_GPU_PARALLEL_BACKEND_WASM_THREAD)
+    parallel::initialize({threads});
+#else
     parallel::warmup({threads});
+#endif
     return 0;
 }
