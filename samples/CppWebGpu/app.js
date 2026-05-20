@@ -92,7 +92,7 @@ worker.onmessage = function(e) {
     }
     console.log("C++ WebGPU ready:", e.data.webgpuReady);
     
-    let { outImage, width, height, prediction, cpuPredictions, largeCpuPredictions, largeGpuPrediction, webgpuReady } = e.data;
+    let { outImage, width, height, prediction, gpuBackend, cpuPredictions, largeCpuPredictions, largeGpuPrediction, webgpuReady } = e.data;
     // width = 400;
     // height = outImage.length / width;;
     let canvas = document.createElement("canvas");
@@ -115,6 +115,11 @@ worker.onmessage = function(e) {
       let predictionText = document.createElement("div");
       predictionText.textContent = `GPU prediction: ${prediction}`;
       outputDiv.appendChild(predictionText);
+    }
+    if (gpuBackend) {
+      let backendText = document.createElement("div");
+      backendText.textContent = `GPU network: ${gpuBackend}`;
+      outputDiv.appendChild(backendText);
     }
     if (cpuPredictions) {
       let cpuPredictionText = document.createElement("div");

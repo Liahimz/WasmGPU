@@ -163,6 +163,7 @@ onmessage = async function(msg) {
 
       let resultVec = null;
       let prediction = -1;
+      let gpuBackend = "unknown";
       let cpuPredictions = null;
       let largeGpuPrediction = -1;
       let largeCpuPredictions = null;
@@ -187,6 +188,9 @@ onmessage = async function(msg) {
         });
         runs.gpu.push(gpuRun);
         prediction = gpuRun.prediction;
+        if (resultVec && resultVec.gpuBackend) {
+          gpuBackend = resultVec.gpuBackend;
+        }
 
         const cpuGraphRun = timedCpuRun("cpu_graph", run, cacheScrub, () =>
           engineInstance.processCpuGraph(cppVec, width, height, channels)
@@ -263,6 +267,7 @@ onmessage = async function(msg) {
       console.log("Preprocessed 28x28 image:", outImage);
       console.log("C++ WebGPU ready:", engineInstance.webgpuReady());
       console.log("GPU prediction:", prediction);
+      console.log("GPU backend:", gpuBackend);
       console.log("CPU predictions:", cpuPredictions);
       console.log("Synthetic large CPU predictions:", largeCpuPredictions);
       console.log("Synthetic large GPU prediction:", largeGpuPrediction);
@@ -275,6 +280,7 @@ onmessage = async function(msg) {
         width: resultVec.width,
         height: resultVec.height,
         prediction,
+        gpuBackend,
         cpuPredictions,
         largeCpuPredictions,
         largeGpuPrediction,

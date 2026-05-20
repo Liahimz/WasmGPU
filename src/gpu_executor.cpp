@@ -313,23 +313,39 @@ bool GpuExecutor::ready() const {
 
 int GpuExecutor::infer(const std::vector<uint8_t>& image) {
 #ifdef __EMSCRIPTEN__
-#if !defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+#if !defined(BUILD_EMDAWN_WEBGPU)
     if (graph_.ready()) {
         const auto inference_start = Clock::now();
+        latest_backend_ = "graph";
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+        const int prediction = graph_.inferClassBytesAsync(image);
+#else
         latest_prediction_ = graph_.inferClassBytes(image);
+#endif
         const auto inference_end = Clock::now();
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+        inference_pending_ = graph_.inferencePending();
+        std::cout << "[timing] gpu_graph_async_start"
+                  << " submit=" << elapsedMs(inference_start, inference_end)
+                  << "ms"
+                  << std::endl;
+        return prediction;
+#else
         inference_pending_ = false;
         std::cout << "[timing] gpu_graph_detail"
                   << " inference=" << elapsedMs(inference_start, inference_end)
                   << "ms prediction=" << latest_prediction_
                   << std::endl;
         return latest_prediction_;
+#endif
     }
 #endif
 
     if (!ready() || !weights_ || !weights_->valid() || image.size() != INPUT_VALUES) {
+        latest_backend_ = "unavailable";
         return -1;
     }
+    latest_backend_ = "fixed_lenet";
 
     const auto input_start = Clock::now();
     std::array<float, INPUT_VALUES> input{};
@@ -486,11 +502,25 @@ void GpuExecutor::prepareSyntheticLargeData() {
 }
 
 bool GpuExecutor::inferencePending() const {
+#if defined(__EMSCRIPTEN__) && defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+    if (graph_.ready()) {
+        return graph_.inferencePending();
+    }
+#endif
     return inference_pending_;
 }
 
 int GpuExecutor::latestPrediction() const {
+#if defined(__EMSCRIPTEN__) && defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+    if (graph_.ready()) {
+        return graph_.latestPrediction();
+    }
+#endif
     return latest_prediction_;
+}
+
+const char* GpuExecutor::latestBackend() const {
+    return latest_backend_;
 }
 
 void GpuExecutor::requestWebGpuDevice() {
@@ -710,7 +740,7 @@ void GpuExecutor::createNetworkResources() {
     if (network_ready_) {
         return;
     }
-#if !defined(BUILD_WASM_WEBGPU_ASYNC) && !defined(BUILD_EMDAWN_WEBGPU)
+#if !defined(BUILD_EMDAWN_WEBGPU)
     if (model_ && model_->valid() && device_ && queue_) {
         if (graph_.attach(device_, queue_) && graph_.prepare()) {
             network_ready_ = true;

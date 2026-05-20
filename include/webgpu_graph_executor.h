@@ -17,6 +17,8 @@ namespace network {
 
 class WebGpuGraphExecutor {
 public:
+    struct Impl;
+
     WebGpuGraphExecutor();
     ~WebGpuGraphExecutor();
 
@@ -37,12 +39,13 @@ public:
     bool ready() const;
     bool prepare();
     int inferClassBytes(const std::vector<uint8_t>& input);
+    int inferClassBytesAsync(const std::vector<uint8_t>& input);
+    bool inferencePending() const;
     int latestPrediction() const;
     const std::string& error() const;
     const std::vector<GeneratedWgsl>& generatedShaders() const;
 
 private:
-    struct Impl;
     Impl* impl_ = nullptr;
 };
 

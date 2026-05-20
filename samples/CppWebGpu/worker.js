@@ -36,6 +36,7 @@ onmessage = async function(msg) {
 
       const resultVec = await engineInstance.process(cppVec, width, height, channels);
       const prediction = resultVec.prediction;
+      const gpuBackend = resultVec.gpuBackend;
 
       const cpuGraphResult = engineInstance.processCpuGraph(cppVec, width, height, channels);
       const cpuScalarResult = engineInstance.processCpu(cppVec, width, height, channels, 0);
@@ -63,6 +64,7 @@ onmessage = async function(msg) {
       console.log("Preprocessed 28x28 image:", outImage);
       console.log("C++ WebGPU ready:", engineInstance.webgpuReady());
       console.log("GPU prediction:", prediction);
+      console.log("GPU backend:", gpuBackend);
       console.log("CPU predictions:", cpuPredictions);
       console.log("Synthetic large CPU predictions:", largeCpuPredictions);
       console.log("Synthetic large GPU prediction:", largeGpuPrediction);
@@ -75,6 +77,7 @@ onmessage = async function(msg) {
         width: resultVec.width,
         height: resultVec.height,
         prediction,
+        gpuBackend,
         cpuPredictions,
         largeCpuPredictions,
         largeGpuPrediction,

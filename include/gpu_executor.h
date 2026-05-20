@@ -28,6 +28,7 @@ public:
     int benchmarkSyntheticLarge(uint32_t input_seed);
     bool inferencePending() const;
     int latestPrediction() const;
+    const char* latestBackend() const;
 
 private:
     const network::TinyLenetWeights* weights_ = nullptr;
@@ -42,6 +43,7 @@ private:
     bool large_synthetic_data_ready_ = false;
     int adapter_request_attempt_ = 0;
     int latest_prediction_ = -1;
+    const char* latest_backend_ = "unavailable";
 
     void requestWebGpuDevice();
 

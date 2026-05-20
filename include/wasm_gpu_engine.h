@@ -6,6 +6,7 @@
 #include "model_loader.h"
 #include "network_weights.h"
 
+#include <string>
 #include <vector>
 #include <cstdint>
 
@@ -14,6 +15,7 @@ struct ProcessResult {
     int width;
     int height;
     int prediction = -1;
+    std::string gpu_backend;
 };
 
 class WasmGpuEngine {

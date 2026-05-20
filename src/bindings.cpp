@@ -16,7 +16,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .field("image", &ProcessResult::image)
         .field("width", &ProcessResult::width)
         .field("height", &ProcessResult::height)
-        .field("prediction", &ProcessResult::prediction);
+        .field("prediction", &ProcessResult::prediction)
+        .field("gpuBackend", &ProcessResult::gpu_backend);
 #if defined(BUILD_DUMMY_ENGINE)
     class_<DummyEngine>("DummyEngine")
         .constructor<>()

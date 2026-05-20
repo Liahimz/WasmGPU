@@ -72,6 +72,7 @@ ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width
 
     const auto inference_start = Clock::now();
     result.prediction = runNetwork(result.image);
+    result.gpu_backend = gpu_.latestBackend();
     const auto inference_end = Clock::now();
 
 #if defined(BUILD_WASM_WEBGPU_ASYNC)

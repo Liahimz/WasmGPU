@@ -218,6 +218,10 @@ int GpuExecutor::latestPrediction() const {
     return latest_prediction_;
 }
 
+const char* GpuExecutor::latestBackend() const {
+    return latest_backend_;
+}
+
 WGPUBuffer GpuExecutor::createBuffer(std::size_t size, WGPUBufferUsage usage) const {
     WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
     desc.size = size;
@@ -630,8 +634,10 @@ void GpuExecutor::createLargeNetworkResources() {
 
 int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     if (!ready() || !weights_ || !weights_->valid() || image.size() != INPUT_VALUES) {
+        latest_backend_ = "unavailable";
         return -1;
     }
+    latest_backend_ = "fixed_lenet";
 
     const auto input_start = Clock::now();
     std::array<float, INPUT_VALUES> input{};
@@ -937,5 +943,6 @@ void GpuExecutor::prepareSyntheticLarge() {}
 int GpuExecutor::benchmarkSyntheticLarge(uint32_t) { return -1; }
 bool GpuExecutor::inferencePending() const { return false; }
 int GpuExecutor::latestPrediction() const { return -1; }
+const char* GpuExecutor::latestBackend() const { return "unavailable"; }
 
 #endif
