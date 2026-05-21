@@ -1,15 +1,13 @@
 #include "cpu_graph_executor.h"
 
+#include "cpu_conv_kernels.h"
+#include "cpu_simd_math.h"
 #include "thread_tools/parallel_utils.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
-
-#if defined(__wasm_simd128__)
-#include <wasm_simd128.h>
-#endif
 
 namespace network {
 namespace {
@@ -37,37 +35,6 @@ void runRange(std::size_t begin, std::size_t end, std::size_t grain_size, bool u
     }
 }
 
-float dotProductScalar(const float* left, const float* right, uint32_t count) {
-    float sum = 0.0f;
-    for (uint32_t i = 0; i < count; ++i) {
-        sum += left[i] * right[i];
-    }
-    return sum;
-}
-
-float dotProductSimd(const float* left, const float* right, uint32_t count) {
-#if defined(__wasm_simd128__)
-    v128_t acc = wasm_f32x4_splat(0.0f);
-    uint32_t i = 0;
-    for (; i + 4 <= count; i += 4) {
-        const v128_t a = wasm_v128_load(left + i);
-        const v128_t b = wasm_v128_load(right + i);
-        acc = wasm_f32x4_add(acc, wasm_f32x4_mul(a, b));
-    }
-
-    alignas(16) float lanes[4];
-    wasm_v128_store(lanes, acc);
-    float sum = lanes[0] + lanes[1] + lanes[2] + lanes[3];
-
-    for (; i < count; ++i) {
-        sum += left[i] * right[i];
-    }
-    return sum;
-#else
-    return dotProductScalar(left, right, count);
-#endif
-}
-
 std::vector<float> runConv2d(
     const ModelDesc& model,
     const LayerDesc& layer,
@@ -92,6 +59,10 @@ std::vector<float> runConv2d(
     const uint32_t out_w = layer.output_shape.dims[2];
 
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
+    if (cpu_conv::runSpecializedConv2d(layer, input, *weights, *bias, options.use_simd, options.use_threads, output)) {
+        return output;
+    }
+
     const std::size_t plane = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t total = static_cast<std::size_t>(out_c) * plane;
 
@@ -133,9 +104,23 @@ std::vector<float> runConv2d(
 
 std::vector<float> runRelu(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
-    runRange(0, output.size(), 256, options.use_threads, [&](std::size_t index) {
-        output[index] = std::max(input[index], 0.0f);
-    });
+    if (options.use_simd) {
+        if (options.use_threads) {
+            constexpr std::size_t ChunkSize = 1024;
+            const std::size_t chunks = (output.size() + ChunkSize - 1) / ChunkSize;
+            parallel::parallelFor(0, chunks, [&](std::size_t chunk) {
+                const std::size_t begin = chunk * ChunkSize;
+                const std::size_t end = std::min(begin + ChunkSize, output.size());
+                simd_math::reluSimd(input.data() + begin, output.data() + begin, end - begin);
+            });
+        } else {
+            simd_math::reluSimd(input.data(), output.data(), output.size());
+        }
+    } else {
+        runRange(0, output.size(), 256, options.use_threads, [&](std::size_t index) {
+            output[index] = std::max(input[index], 0.0f);
+        });
+    }
     return output;
 }
 
@@ -156,24 +141,34 @@ std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>
         const uint32_t oy = rem / out_w;
         const uint32_t ox = rem % out_w;
 
-        float best = -std::numeric_limits<float>::infinity();
-        for (uint32_t ky = 0; ky < layer.kernel_y; ++ky) {
-            for (uint32_t kx = 0; kx < layer.kernel_x; ++kx) {
-                const int iy = static_cast<int>(oy * layer.stride_y + ky) - static_cast<int>(layer.padding_y);
-                const int ix = static_cast<int>(ox * layer.stride_x + kx) - static_cast<int>(layer.padding_x);
-                if (iy < 0 || ix < 0 || iy >= static_cast<int>(in_h) || ix >= static_cast<int>(in_w)) {
-                    continue;
-                }
-
-                const std::size_t input_index =
-                    static_cast<std::size_t>(c) * in_h * in_w +
-                    static_cast<std::size_t>(iy) * in_w +
-                    static_cast<std::size_t>(ix);
-                best = std::max(best, input[input_index]);
-            }
-        }
-
-        output[index] = best;
+        const float* channel_input = input.data() + static_cast<std::size_t>(c) * in_h * in_w;
+        output[index] = options.use_simd
+            ? simd_math::maxPoolSimd(
+                channel_input,
+                in_h,
+                in_w,
+                layer.kernel_y,
+                layer.kernel_x,
+                layer.stride_y,
+                layer.stride_x,
+                layer.padding_y,
+                layer.padding_x,
+                oy,
+                ox
+            )
+            : simd_math::maxPoolScalar(
+                channel_input,
+                in_h,
+                in_w,
+                layer.kernel_y,
+                layer.kernel_x,
+                layer.stride_y,
+                layer.stride_x,
+                layer.padding_y,
+                layer.padding_x,
+                oy,
+                ox
+            );
     });
 
     return output;
@@ -209,10 +204,9 @@ std::vector<float> runGlobalAvgPool2d(const LayerDesc& layer, const std::vector<
     std::vector<float> output(channels, 0.0f);
     runRange(0, channels, 1, options.use_threads, [&](std::size_t channel) {
         const std::size_t base = channel * plane;
-        float sum = 0.0f;
-        for (std::size_t i = 0; i < plane; ++i) {
-            sum += input[base + i];
-        }
+        const float sum = options.use_simd
+            ? simd_math::sumSimd(input.data() + base, plane)
+            : simd_math::sumScalar(input.data() + base, plane);
         output[channel] = sum / static_cast<float>(plane);
     });
     return output;
@@ -238,8 +232,8 @@ std::vector<float> runLinear(
     runRange(0, layer.out_features, 1, options.use_threads, [&](std::size_t out_index) {
         const std::size_t weight_offset = out_index * layer.in_features;
         const float dot = options.use_simd
-            ? dotProductSimd(input.data(), weights->data() + weight_offset, layer.in_features)
-            : dotProductScalar(input.data(), weights->data() + weight_offset, layer.in_features);
+            ? simd_math::dotProductSimd(input.data(), weights->data() + weight_offset, layer.in_features)
+            : simd_math::dotProductScalar(input.data(), weights->data() + weight_offset, layer.in_features);
         const float sum = (*bias)[out_index] + dot;
         output[out_index] = sum;
     });

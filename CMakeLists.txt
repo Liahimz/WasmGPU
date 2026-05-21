@@ -96,6 +96,7 @@ set(WASM_GPU_ENGINE_EXTRA_DEFINES)
 set(WASM_GPU_MODEL_SOURCES
     src/model_loader.cpp
     src/wgsl_generator.cpp
+    src/cpu_conv_kernels.cpp
     src/cpu_graph_executor.cpp
     src/webgpu_graph_executor.cpp
 )

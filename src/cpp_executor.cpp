@@ -1,14 +1,11 @@
 #include "cpp_executor.h"
+#include "cpu_simd_math.h"
 #include "thread_tools/parallel_utils.h"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <limits>
-
-#if defined(__wasm_simd128__)
-#include <wasm_simd128.h>
-#endif
 
 namespace {
 
@@ -33,37 +30,6 @@ constexpr int LargeConvHeight = LargeInputHeight - LargeKernelHeight + 1;
 constexpr int LargeInputValues = LargeInputWidth * LargeInputHeight;
 constexpr int LargeConvPlaneValues = LargeConvWidth * LargeConvHeight;
 constexpr int LargeConvValues = LargeConvPlaneValues * LargeChannels;
-
-float dotProductScalar(const float* left, const float* right, int count) {
-    float sum = 0.0f;
-    for (int i = 0; i < count; ++i) {
-        sum += left[i] * right[i];
-    }
-    return sum;
-}
-
-float dotProductSimd(const float* left, const float* right, int count) {
-#if defined(__wasm_simd128__)
-    v128_t acc = wasm_f32x4_splat(0.0f);
-    int i = 0;
-    for (; i + 4 <= count; i += 4) {
-        const v128_t a = wasm_v128_load(left + i);
-        const v128_t b = wasm_v128_load(right + i);
-        acc = wasm_f32x4_add(acc, wasm_f32x4_mul(a, b));
-    }
-
-    alignas(16) float lanes[4];
-    wasm_v128_store(lanes, acc);
-    float sum = lanes[0] + lanes[1] + lanes[2] + lanes[3];
-
-    for (; i < count; ++i) {
-        sum += left[i] * right[i];
-    }
-    return sum;
-#else
-    return dotProductScalar(left, right, count);
-#endif
-}
 
 void computeConvChannel(
     const float* input,
@@ -118,8 +84,8 @@ std::array<float, LogitValues> computeLinear(
     for (int cls = 0; cls < LogitValues; ++cls) {
         const float* linear_weights = weights.linear_weights.data() + cls * ConvValues;
         const float dot = use_simd
-            ? dotProductSimd(conv_output, linear_weights, ConvValues)
-            : dotProductScalar(conv_output, linear_weights, ConvValues);
+            ? ::network::simd_math::dotProductSimd(conv_output, linear_weights, ConvValues)
+            : ::network::simd_math::dotProductScalar(conv_output, linear_weights, ConvValues);
         logits[cls] = weights.linear_bias[cls] + dot;
     }
     return logits;
@@ -229,8 +195,8 @@ std::array<float, LogitValues> computeLargeLinear(
     for (int cls = 0; cls < LogitValues; ++cls) {
         const float* linear_weights = network.linear_weights.data() + cls * LargeConvValues;
         const float dot = use_simd
-            ? dotProductSimd(conv_output, linear_weights, LargeConvValues)
-            : dotProductScalar(conv_output, linear_weights, LargeConvValues);
+            ? ::network::simd_math::dotProductSimd(conv_output, linear_weights, LargeConvValues)
+            : ::network::simd_math::dotProductScalar(conv_output, linear_weights, LargeConvValues);
         logits[cls] = network.linear_bias[cls] + dot;
     }
     return logits;
