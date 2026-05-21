@@ -77,3 +77,6 @@ network_trainer/checkpoints/
 
 # mac 
 .DS_Store
+
+#Notes
+Future_Work.txt
