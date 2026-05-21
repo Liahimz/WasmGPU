@@ -17,7 +17,9 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .field("width", &ProcessResult::width)
         .field("height", &ProcessResult::height)
         .field("prediction", &ProcessResult::prediction)
-        .field("gpuBackend", &ProcessResult::gpu_backend);
+        .field("gpuBackend", &ProcessResult::gpu_backend)
+        .field("classLabel", &ProcessResult::class_label)
+        .field("topK", &ProcessResult::top_k);
 #if defined(BUILD_DUMMY_ENGINE)
     class_<DummyEngine>("DummyEngine")
         .constructor<>()
@@ -34,6 +36,12 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("process", &WasmGpuEngine::process, async())
 #endif
         .function("processCpu", &WasmGpuEngine::processCpu)
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+        .function("processResnet", &WasmGpuEngine::processResnet)
+#else
+        .function("processResnet", &WasmGpuEngine::processResnet, async())
+#endif
+        .function("processResnetCpu", &WasmGpuEngine::processResnetCpu)
         .function("benchmarkCpuLarge", &WasmGpuEngine::benchmarkCpuLarge)
         .function("prepareSyntheticLargeData", &WasmGpuEngine::prepareSyntheticLargeData)
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
@@ -45,6 +53,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("webgpuReady", &WasmGpuEngine::webgpuReady)
         .function("inferencePending", &WasmGpuEngine::inferencePending)
         .function("latestPrediction", &WasmGpuEngine::latestPrediction)
+        .function("latestClassLabel", &WasmGpuEngine::latestClassLabel)
+        .function("latestTopK", &WasmGpuEngine::latestTopK)
         ;
 #else
     class_<GpuEngine>("GpuEngine")

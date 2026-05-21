@@ -22,6 +22,7 @@ struct WebGpuGraphExecutor::Impl {
     bool resources_ready = false;
     bool inference_pending = false;
     int latest_prediction = -1;
+    std::vector<float> latest_output;
     double pending_start_ms = 0.0;
     double pending_submit_ms = 0.0;
     std::map<std::string, uint32_t> tensor_indices;
@@ -154,13 +155,18 @@ void destroyLayerObjects(
     wgpuBufferRelease(weights);
 }
 
-int readPredictionFromMappedBuffer(WGPUBuffer buffer, uint64_t size) {
+std::vector<float> readOutputFromMappedBuffer(WGPUBuffer buffer, uint64_t size) {
     std::vector<float> output(size / sizeof(float));
     const void* mapped = wgpuBufferGetConstMappedRange(buffer, 0, size);
     if (mapped) {
         std::memcpy(output.data(), mapped, size);
     }
     wgpuBufferUnmap(buffer);
+    return output;
+}
+
+int readPredictionFromMappedBuffer(WGPUBuffer buffer, uint64_t size, std::vector<float>& output) {
+    output = readOutputFromMappedBuffer(buffer, size);
     return argmax(output);
 }
 
@@ -202,12 +208,26 @@ bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<uint8_t>& in
     return true;
 }
 
+bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<float>& input) {
+    if (!impl.model || input.size() != impl.model->input_shape.elementCount()) {
+        impl.error = "Input size does not match model input shape";
+        return false;
+    }
+    auto input_it = impl.tensor_indices.find(impl.model->input_name);
+    if (input_it == impl.tensor_indices.end()) {
+        impl.error = "Input tensor is not prepared";
+        return false;
+    }
+    wgpuQueueWriteBuffer(impl.queue, impl.tensors[input_it->second].buffer, 0, input.data(), input.size() * sizeof(float));
+    return true;
+}
+
 void onGraphReadbackMapped(WGPUMapAsyncStatus, WGPUStringView, void* userdata1, void*) {
     auto* impl = static_cast<WebGpuGraphExecutor::Impl*>(userdata1);
     if (!impl) {
         return;
     }
-    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size);
+    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size, impl->latest_output);
     const double total_ms = nowMs() - impl->pending_start_ms;
     std::cout << "[timing] dawn_gpu_graph_detail"
               << " submit=" << impl->pending_submit_ms
@@ -258,11 +278,16 @@ void destroyLayerObjects(
     wgpu_object_destroy(weights);
 }
 
-int readPredictionFromMappedBuffer(WGpuBuffer buffer, uint64_t size) {
+std::vector<float> readOutputFromMappedBuffer(WGpuBuffer buffer, uint64_t size) {
     std::vector<float> output(size / sizeof(float));
     wgpu_buffer_get_mapped_range(buffer, 0, size);
     wgpu_buffer_read_mapped_range(buffer, 0, 0, output.data(), size);
     wgpu_buffer_unmap(buffer);
+    return output;
+}
+
+int readPredictionFromMappedBuffer(WGpuBuffer buffer, uint64_t size, std::vector<float>& output) {
+    output = readOutputFromMappedBuffer(buffer, size);
     return argmax(output);
 }
 
@@ -303,13 +328,27 @@ bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<uint8_t>& in
     return true;
 }
 
+bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<float>& input) {
+    if (!impl.model || input.size() != impl.model->input_shape.elementCount()) {
+        impl.error = "Input size does not match model input shape";
+        return false;
+    }
+    auto input_it = impl.tensor_indices.find(impl.model->input_name);
+    if (input_it == impl.tensor_indices.end()) {
+        impl.error = "Input tensor is not prepared";
+        return false;
+    }
+    wgpu_queue_write_buffer(impl.queue, impl.tensors[input_it->second].buffer, 0, input.data(), input.size() * sizeof(float));
+    return true;
+}
+
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
 void onGraphReadbackMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, double_int53_t, double_int53_t) {
     auto* impl = static_cast<WebGpuGraphExecutor::Impl*>(user_data);
     if (!impl) {
         return;
     }
-    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size);
+    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size, impl->latest_output);
     const double total_ms = nowMs() - impl->pending_start_ms;
     std::cout << "[timing] gpu_graph_detail"
               << " submit=" << impl->pending_submit_ms
@@ -384,6 +423,7 @@ bool WebGpuGraphExecutor::configure(const ModelDesc& model) {
     impl_->model = nullptr;
     impl_->error.clear();
     impl_->shaders.clear();
+    impl_->latest_output.clear();
     impl_->resources_ready = false;
     impl_->inference_pending = false;
 
@@ -776,7 +816,40 @@ int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
     wgpu_queue_submit_one_and_destroy(impl_->queue, command_buffer);
 
     wgpu_buffer_map_sync(impl_->readback, WGPU_MAP_MODE_READ, 0, impl_->output_size);
-    impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->output_size);
+    impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->output_size, impl_->latest_output);
+    std::cout << "[timing] gpu_graph_detail"
+              << " total_inference=" << (nowMs() - start_ms)
+              << "ms prediction=" << impl_->latest_prediction
+              << std::endl;
+    return impl_->latest_prediction;
+#else
+    (void)input;
+    return -1;
+#endif
+}
+
+int WebGpuGraphExecutor::inferClass(const std::vector<float>& input) {
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    (void)input;
+    impl_->error = "Synchronous Dawn graph inference is not supported";
+    return -1;
+#elif defined(__EMSCRIPTEN__)
+    if (!ready() && !prepare()) {
+        return -1;
+    }
+    if (impl_->inference_pending || !uploadInput(*impl_, input)) {
+        return -1;
+    }
+
+    const double start_ms = nowMs();
+    WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(impl_->device, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
+    encodeGraphDispatch(*impl_, encoder);
+
+    WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
+    wgpu_queue_submit_one_and_destroy(impl_->queue, command_buffer);
+
+    wgpu_buffer_map_sync(impl_->readback, WGPU_MAP_MODE_READ, 0, impl_->output_size);
+    impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->output_size, impl_->latest_output);
     std::cout << "[timing] gpu_graph_detail"
               << " total_inference=" << (nowMs() - start_ms)
               << "ms prediction=" << impl_->latest_prediction
@@ -846,12 +919,74 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
 #endif
 }
 
+int WebGpuGraphExecutor::inferClassAsync(const std::vector<float>& input) {
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    if (!ready() && !prepare()) {
+        return -1;
+    }
+    if (impl_->inference_pending || !uploadInput(*impl_, input)) {
+        return -1;
+    }
+
+    impl_->pending_start_ms = nowMs();
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(impl_->device, nullptr);
+    encodeGraphDispatch(*impl_, encoder);
+
+    WGPUCommandBuffer command_buffer = wgpuCommandEncoderFinish(encoder, nullptr);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuQueueSubmit(impl_->queue, 1, &command_buffer);
+    wgpuCommandBufferRelease(command_buffer);
+
+    impl_->inference_pending = true;
+    impl_->pending_submit_ms = nowMs() - impl_->pending_start_ms;
+    WGPUBufferMapCallbackInfo callback = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    callback.mode = WGPUCallbackMode_AllowSpontaneous;
+    callback.callback = &onGraphReadbackMapped;
+    callback.userdata1 = impl_;
+    wgpuBufferMapAsync(impl_->readback, WGPUMapMode_Read, 0, impl_->output_size, callback);
+    return -1;
+#elif defined(__EMSCRIPTEN__) && defined(BUILD_WASM_WEBGPU_ASYNC)
+    if (!ready() && !prepare()) {
+        return -1;
+    }
+    if (impl_->inference_pending || !uploadInput(*impl_, input)) {
+        return -1;
+    }
+
+    impl_->pending_start_ms = nowMs();
+    WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(impl_->device, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
+    encodeGraphDispatch(*impl_, encoder);
+
+    WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
+    wgpu_queue_submit_one_and_destroy(impl_->queue, command_buffer);
+
+    impl_->inference_pending = true;
+    impl_->pending_submit_ms = nowMs() - impl_->pending_start_ms;
+    wgpu_buffer_map_async(
+        impl_->readback,
+        &onGraphReadbackMapped,
+        impl_,
+        WGPU_MAP_MODE_READ,
+        0,
+        impl_->output_size
+    );
+    return -1;
+#else
+    (void)input;
+    return -1;
+#endif
+}
+
 bool WebGpuGraphExecutor::inferencePending() const {
     return impl_->inference_pending;
 }
 
 int WebGpuGraphExecutor::latestPrediction() const {
     return impl_->latest_prediction;
+}
+
+const std::vector<float>& WebGpuGraphExecutor::latestOutput() const {
+    return impl_->latest_output;
 }
 
 const std::string& WebGpuGraphExecutor::error() const {

@@ -298,6 +298,18 @@ int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) 
     return argmax(logits);
 }
 
+std::vector<float> CppExecutor::infer(const std::vector<float>& input, CppExecutorMode mode) const {
+    if (!graph_.ready()) {
+        return {};
+    }
+
+    mode = normalizeMode(mode);
+    network::CpuGraphOptions options;
+    options.use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
+    options.use_threads = mode == CppExecutorMode::SimdThreads;
+    return graph_.infer(input, options);
+}
+
 void CppExecutor::prepareSyntheticLarge() const {
     (void)largeSyntheticNetwork();
 }

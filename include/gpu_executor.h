@@ -23,11 +23,13 @@ public:
     void configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights);
     bool ready() const;
     int infer(const std::vector<uint8_t>& image);
+    int infer(const std::vector<float>& input);
     void prepareSyntheticLargeData();
     void prepareSyntheticLarge();
     int benchmarkSyntheticLarge(uint32_t input_seed);
     bool inferencePending() const;
     int latestPrediction() const;
+    const std::vector<float>& latestOutput() const;
     const char* latestBackend() const;
 
 private:

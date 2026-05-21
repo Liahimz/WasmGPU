@@ -234,6 +234,10 @@ int GpuExecutor::latestPrediction() const {
     return latest_prediction_;
 }
 
+const std::vector<float>& GpuExecutor::latestOutput() const {
+    return graph_.latestOutput();
+}
+
 const char* GpuExecutor::latestBackend() const {
     return latest_backend_;
 }
@@ -754,6 +758,25 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
     return -1;
 }
 
+int GpuExecutor::infer(const std::vector<float>& input) {
+    if (graph_.ready()) {
+        const auto inference_start = Clock::now();
+        latest_backend_ = "graph";
+        const int prediction = graph_.inferClassAsync(input);
+        const auto inference_end = Clock::now();
+        pending_kind_ = 1;
+        inference_pending_ = graph_.inferencePending();
+        std::cout << "[timing] dawn_gpu_graph_async_start"
+                  << " submit=" << elapsedMs(inference_start, inference_end)
+                  << "ms"
+                  << std::endl;
+        return prediction;
+    }
+
+    latest_backend_ = "unavailable";
+    return -1;
+}
+
 int GpuExecutor::benchmarkSyntheticLarge(uint32_t input_seed) {
     if (!webgpu_ready_) {
         return -1;
@@ -979,11 +1002,16 @@ void GpuExecutor::configure(const network::TinyLenetWeights*) {}
 void GpuExecutor::configure(const network::ModelDesc*, const network::TinyLenetWeights*) {}
 bool GpuExecutor::ready() const { return false; }
 int GpuExecutor::infer(const std::vector<uint8_t>&) { return -1; }
+int GpuExecutor::infer(const std::vector<float>&) { return -1; }
 void GpuExecutor::prepareSyntheticLargeData() {}
 void GpuExecutor::prepareSyntheticLarge() {}
 int GpuExecutor::benchmarkSyntheticLarge(uint32_t) { return -1; }
 bool GpuExecutor::inferencePending() const { return false; }
 int GpuExecutor::latestPrediction() const { return -1; }
+const std::vector<float>& GpuExecutor::latestOutput() const {
+    static const std::vector<float> empty;
+    return empty;
+}
 const char* GpuExecutor::latestBackend() const { return "unavailable"; }
 
 #endif

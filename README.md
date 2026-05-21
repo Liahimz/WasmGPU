@@ -15,13 +15,14 @@ This is intentionally simple and experimental. The point is to make the data mov
 
 ## Build Modes
 
-The build script supports five modes:
+The build script supports six modes:
 
 | Mode | Meaning | Sample folder |
 | --- | --- | --- |
 | `cpp-webgpu` | Default desktop benchmark mode. C++/WASM owns WebGPU through `thirdparty/wasm_webgpu` and uses JSPI for sync-looking readback. | `samples/CppWebGpu` |
 | `cpp-webgpu-async` | Mobile-friendly C++ WebGPU mode. Uses async readback callbacks instead of JSPI / `WebAssembly.Suspending`. | `samples/CppWebGpuAsync` |
 | `cpp-webgpu-dawn` | Experimental comparison mode. Uses Emscripten's Dawn-backed `--use-port=emdawnwebgpu` WebGPU binding with the same async benchmark UI and CPU paths. Requires Emscripten 4.0.10+. | `samples/CppWebGpuAsync` |
+| `resnet50` | ImageNet ResNet50 bring-up mode. Uses C++ ImageNet preprocessing, C++ WebGPU graph inference, CPU graph comparison, and top-k labels. | `samples/ResNet50` |
 | `js-webgpu` | Older path where JavaScript owns WebGPU and calls WASM for preprocessing/postprocessing. | `samples/JsWebGpu` |
 | `dummy` | Minimal CPU/sample mode for older experiments. | `samples/Dummy` |
 
@@ -37,8 +38,15 @@ Explicit mode:
 python3 ./build.py --mode cpp-webgpu
 python3 ./build.py --mode cpp-webgpu-async
 python3 ./build.py --mode cpp-webgpu-dawn
+python3 ./build.py --mode resnet50
 python3 ./build.py --mode js-webgpu
 python3 ./build.py --mode dummy
+```
+
+Before building `resnet50`, generate the ignored ResNet assets:
+
+```bash
+python3 ./network_trainer/export_resnet50.py --export-folded-conv --weights imagenet --export-manifest-slice full
 ```
 
 CPU threaded paths use `wasm-thread` by default. You can switch the backend at build time:

@@ -6,6 +6,8 @@
 #include <chrono>
 #include <iostream>
 #include <limits>
+#include <sstream>
+#include <utility>
 
 namespace {
 
@@ -27,6 +29,40 @@ const char* cpuModeName(int mode) {
     return "simd";
 }
 
+std::vector<std::string> parseStringArray(const std::string& text) {
+    std::vector<std::string> result;
+    std::string current;
+    bool in_string = false;
+    bool escape = false;
+
+    for (char ch : text) {
+        if (!in_string) {
+            if (ch == '"') {
+                in_string = true;
+                current.clear();
+            }
+            continue;
+        }
+
+        if (escape) {
+            current.push_back(ch);
+            escape = false;
+            continue;
+        }
+        if (ch == '\\') {
+            escape = true;
+            continue;
+        }
+        if (ch == '"') {
+            result.push_back(current);
+            in_string = false;
+            continue;
+        }
+        current.push_back(ch);
+    }
+    return result;
+}
+
 } // namespace
 
 WasmGpuEngine::WasmGpuEngine() {}
@@ -36,8 +72,14 @@ void WasmGpuEngine::configure(int target_size_) {
     std::cout << "Configure" << std::endl;
     target_size = target_size_;
 
+#if defined(BUILD_RESNET50_MODE)
+    weights_ = {};
+    model_ = network::loadModelFromEmbedded("resnet50/resnet50_full_manifest.json");
+    labels_ = parseStringArray(network::loadEmbeddedText("resnet50/imagenet_classes.json"));
+#else
     weights_ = network::loadTinyLenetWeights();
     model_ = network::loadModelFromEmbedded("lenet/tiny_lenet_manifest.json");
+#endif
     if (model_.valid()) {
         std::cout << "Loaded embedded model manifest: " << model_.name
                   << " input=" << model_.input_shape.toString()
@@ -47,6 +89,7 @@ void WasmGpuEngine::configure(int target_size_) {
         std::cerr << "Failed to load embedded model manifest: " << model_.error << std::endl;
     }
 
+#if !defined(BUILD_RESNET50_MODE)
     if (weights_.valid()) {
         std::cout << "Loaded embedded tiny_lenet weights: "
                   << weights_.conv_weights.size() << " conv weights, "
@@ -55,10 +98,69 @@ void WasmGpuEngine::configure(int target_size_) {
     } else {
         std::cerr << "Failed to load embedded tiny_lenet weights: " << weights_.error << std::endl;
     }
+#endif
 
     gpu_.configure(model_.valid() ? &model_ : nullptr, &weights_);
     cpu_.configure(model_.valid() ? &model_ : nullptr, &weights_);
     parallel::initialize();
+}
+
+ProcessResult WasmGpuEngine::processResnet(const std::vector<uint8_t>& data, int width, int height, int channels) {
+    const auto total_start = Clock::now();
+    const auto preprocess_start = Clock::now();
+    std::vector<float> input = preprocessResnetInput(data, width, height, channels);
+    std::vector<uint8_t> preview = preprocess_imagenet_rgb_preview(data.data(), width, height, channels, 256, 224);
+    const auto preprocess_end = Clock::now();
+
+    ProcessResult result;
+    result.width = 224;
+    result.height = 224;
+    result.image = std::move(preview);
+    const auto inference_start = Clock::now();
+    result.prediction = runNetwork(input);
+    result.gpu_backend = gpu_.latestBackend();
+    result.class_label = classLabel(result.prediction);
+    const auto inference_end = Clock::now();
+#if !defined(BUILD_WASM_WEBGPU_ASYNC)
+    result.top_k = topKText(gpu_.latestOutput(), 5);
+#endif
+    std::cout << "[timing] resnet_gpu preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+              << "ms submit_or_inference=" << elapsedMs(inference_start, inference_end)
+              << "ms total_to_start=" << elapsedMs(total_start, inference_end)
+              << "ms prediction=" << result.prediction
+              << std::endl;
+    return result;
+}
+
+ProcessResult WasmGpuEngine::processResnetCpu(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels,
+    int mode
+) {
+    const auto total_start = Clock::now();
+    const auto preprocess_start = Clock::now();
+    std::vector<float> input = preprocessResnetInput(data, width, height, channels);
+    const auto preprocess_end = Clock::now();
+
+    const auto inference_start = Clock::now();
+    std::vector<float> logits = cpu_.infer(input, static_cast<CppExecutorMode>(mode));
+    const auto inference_end = Clock::now();
+
+    ProcessResult result;
+    result.width = 224;
+    result.height = 224;
+    result.prediction = argmax(logits);
+    result.class_label = classLabel(result.prediction);
+    result.top_k = topKText(logits, 5);
+    std::cout << "[timing] resnet_cpu mode=" << cpuModeName(mode)
+              << " preprocess=" << elapsedMs(preprocess_start, preprocess_end)
+              << "ms inference=" << elapsedMs(inference_start, inference_end)
+              << "ms total=" << elapsedMs(total_start, inference_end)
+              << "ms prediction=" << result.prediction
+              << std::endl;
+    return result;
 }
 
 ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width, int height, int channels) {
@@ -70,6 +172,7 @@ ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width
     const auto inference_start = Clock::now();
     result.prediction = runNetwork(result.image);
     result.gpu_backend = gpu_.latestBackend();
+    result.class_label = classLabel(result.prediction);
     const auto inference_end = Clock::now();
 
 #if defined(BUILD_WASM_WEBGPU_ASYNC)
@@ -102,6 +205,7 @@ ProcessResult WasmGpuEngine::processCpu(
 
     const auto inference_start = Clock::now();
     result.prediction = cpu_.infer(result.image, static_cast<CppExecutorMode>(mode));
+    result.class_label = classLabel(result.prediction);
     const auto inference_end = Clock::now();
 
     std::cout << "[timing] cpu mode=" << cpuModeName(mode)
@@ -203,6 +307,50 @@ ProcessResult WasmGpuEngine::preprocess(
     return result;
 }
 
+std::vector<float> WasmGpuEngine::preprocessResnetInput(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels
+) const {
+    return preprocess_imagenet_rgb_chw(data.data(), width, height, channels, 256, 224);
+}
+
+std::string WasmGpuEngine::topKText(const std::vector<float>& logits, int count) const {
+    if (logits.empty() || count <= 0) {
+        return "";
+    }
+    std::vector<int> indices(logits.size());
+    for (std::size_t i = 0; i < indices.size(); ++i) {
+        indices[i] = static_cast<int>(i);
+    }
+    const int kept = std::min<int>(count, static_cast<int>(indices.size()));
+    std::partial_sort(indices.begin(), indices.begin() + kept, indices.end(), [&](int a, int b) {
+        return logits[a] > logits[b];
+    });
+
+    std::ostringstream out;
+    for (int i = 0; i < kept; ++i) {
+        const int index = indices[i];
+        if (i != 0) {
+            out << "\n";
+        }
+        out << (i + 1) << ". " << index;
+        if (index >= 0 && static_cast<std::size_t>(index) < labels_.size()) {
+            out << " " << labels_[index];
+        }
+        out << " score=" << logits[index];
+    }
+    return out.str();
+}
+
+std::string WasmGpuEngine::classLabel(int index) const {
+    if (index < 0 || static_cast<std::size_t>(index) >= labels_.size()) {
+        return "";
+    }
+    return labels_[index];
+}
+
 int WasmGpuEngine::argmax(const std::vector<float>& data) {
     int result = -1;
     float max = -std::numeric_limits<float>::infinity();
@@ -227,10 +375,26 @@ int WasmGpuEngine::latestPrediction() const {
     return gpu_.latestPrediction();
 }
 
+std::string WasmGpuEngine::latestClassLabel() const {
+    return classLabel(gpu_.latestPrediction());
+}
+
+std::string WasmGpuEngine::latestTopK(int count) const {
+    return topKText(gpu_.latestOutput(), count);
+}
+
 int WasmGpuEngine::runNetwork(const std::vector<uint8_t>& image) {
-    if (!weights_.valid()) {
+    if (!model_.valid() && !weights_.valid()) {
         return -1;
     }
 
     return gpu_.infer(image);
+}
+
+int WasmGpuEngine::runNetwork(const std::vector<float>& input) {
+    if (!model_.valid()) {
+        return -1;
+    }
+
+    return gpu_.infer(input);
 }

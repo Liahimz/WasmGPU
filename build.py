@@ -12,6 +12,7 @@ BUILD_MODES = {
     "cpp-webgpu": "samples/CppWebGpu",
     "cpp-webgpu-async": "samples/CppWebGpuAsync",
     "cpp-webgpu-dawn": "samples/CppWebGpuAsync",
+    "resnet50": "samples/ResNet50",
     "js-webgpu": "samples/JsWebGpu",
     "dummy": "samples/Dummy",
 }
@@ -94,14 +95,16 @@ def parse_args():
     parser.add_argument(
         "--parallel-backend",
         choices=["wasm-thread", "pthread", "std-thread", "tbb", "serial"],
-        default=os.environ.get("WASM_GPU_PARALLEL_BACKEND", "pthread"),
-        help="CPU parallel backend. Default: pthread.",
+        default=os.environ.get("WASM_GPU_PARALLEL_BACKEND"),
+        help="CPU parallel backend. Default: serial for resnet50, pthread otherwise.",
     )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if args.parallel_backend is None:
+        args.parallel_backend = "serial" if args.mode == "resnet50" else "pthread"
     sample_dir = BUILD_MODES[args.mode]
     print(f"Build mode: {args.mode}")
     print(f"Sample dir: {sample_dir}")

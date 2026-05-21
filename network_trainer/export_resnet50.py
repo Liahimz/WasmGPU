@@ -66,11 +66,12 @@ def load_torchvision_resnet50(cache_dir, weights):
     selected_weights = None if weights == "random" else ResNet50_Weights.IMAGENET1K_V2
     model = resnet50(weights=selected_weights)
     model.eval()
-    return model
+    categories = ResNet50_Weights.IMAGENET1K_V2.meta.get("categories", [])
+    return model, categories
 
 
 def export_folded_conv_npz(out_dir, cache_dir, weights):
-    model = load_torchvision_resnet50(cache_dir, weights)
+    model, categories = load_torchvision_resnet50(cache_dir, weights)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     arrays = {}
@@ -118,6 +119,8 @@ def export_folded_conv_npz(out_dir, cache_dir, weights):
     meta_path = out_dir / f"resnet50_folded_conv_bn_{suffix}.json"
     np.savez(npz_path, **arrays)
     meta_path.write_text(json.dumps({"folded_convs": metadata, "linear": linear_metadata}, indent=2) + "\n")
+    if categories:
+        (out_dir / "imagenet_classes.json").write_text(json.dumps(categories, indent=2) + "\n")
     print(f"Exported {len(metadata)} folded conv+bn pairs")
     print("Exported final fc linear weights")
     print(f"Wrote raw folded .bin tensors to {out_dir}")

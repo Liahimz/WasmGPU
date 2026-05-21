@@ -829,6 +829,17 @@ ModelDesc loadModelFromEmbedded(const std::string& manifest_name) {
     return model;
 }
 
+std::string loadEmbeddedText(const std::string& file_name) {
+    const internal::EmbeddedNetworkBlob* blob = findBlob(file_name);
+    if (!blob) {
+        return {};
+    }
+    return std::string(
+        reinterpret_cast<const char*>(blob->data),
+        reinterpret_cast<const char*>(blob->data + blob->size)
+    );
+}
+
 std::vector<std::string> embeddedModelFiles() {
     std::vector<std::string> files;
     for (std::size_t i = 0; i < internal::NETWORK_BLOB_COUNT; ++i) {

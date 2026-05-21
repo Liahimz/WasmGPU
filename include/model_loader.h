@@ -82,6 +82,7 @@ struct ModelDesc {
 };
 
 ModelDesc loadModelFromEmbedded(const std::string& manifest_name);
+std::string loadEmbeddedText(const std::string& file_name);
 std::vector<std::string> embeddedModelFiles();
 
 } // namespace network

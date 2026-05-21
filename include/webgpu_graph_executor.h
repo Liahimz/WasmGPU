@@ -39,9 +39,12 @@ public:
     bool ready() const;
     bool prepare();
     int inferClassBytes(const std::vector<uint8_t>& input);
+    int inferClass(const std::vector<float>& input);
     int inferClassBytesAsync(const std::vector<uint8_t>& input);
+    int inferClassAsync(const std::vector<float>& input);
     bool inferencePending() const;
     int latestPrediction() const;
+    const std::vector<float>& latestOutput() const;
     const std::string& error() const;
     const std::vector<GeneratedWgsl>& generatedShaders() const;
 

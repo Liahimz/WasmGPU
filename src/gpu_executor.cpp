@@ -472,6 +472,45 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
 #endif
 }
 
+int GpuExecutor::infer(const std::vector<float>& input) {
+#ifdef __EMSCRIPTEN__
+#if !defined(BUILD_EMDAWN_WEBGPU)
+    if (graph_.ready()) {
+        const auto inference_start = Clock::now();
+        latest_backend_ = "graph";
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+        const int prediction = graph_.inferClassAsync(input);
+#else
+        latest_prediction_ = graph_.inferClass(input);
+#endif
+        const auto inference_end = Clock::now();
+#if defined(BUILD_WASM_WEBGPU_ASYNC)
+        pending_kind_ = 1;
+        inference_pending_ = graph_.inferencePending();
+        std::cout << "[timing] gpu_graph_async_start"
+                  << " submit=" << elapsedMs(inference_start, inference_end)
+                  << "ms"
+                  << std::endl;
+        return prediction;
+#else
+        inference_pending_ = false;
+        std::cout << "[timing] gpu_graph_detail"
+                  << " inference=" << elapsedMs(inference_start, inference_end)
+                  << "ms prediction=" << latest_prediction_
+                  << std::endl;
+        return latest_prediction_;
+#endif
+    }
+#else
+    (void)input;
+#endif
+#else
+    (void)input;
+#endif
+    latest_backend_ = "unavailable";
+    return -1;
+}
+
 void GpuExecutor::prepareSyntheticLarge() {
 #ifdef __EMSCRIPTEN__
     if (webgpu_ready_) {
@@ -524,6 +563,10 @@ int GpuExecutor::latestPrediction() const {
     }
 #endif
     return latest_prediction_;
+}
+
+const std::vector<float>& GpuExecutor::latestOutput() const {
+    return graph_.latestOutput();
 }
 
 const char* GpuExecutor::latestBackend() const {

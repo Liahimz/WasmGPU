@@ -218,3 +218,44 @@ std::vector<float> preprocess_imagenet_rgb_chw(
     rgb_to_chw_normalized(cropped_rgb.data(), chw.data(), crop_size, crop_size, ImageNetMean, ImageNetStd);
     return chw;
 }
+
+std::vector<uint8_t> preprocess_imagenet_rgb_preview(
+    const uint8_t* src,
+    int width,
+    int height,
+    int channels,
+    int resize_shorter_side = 256,
+    int crop_size = 224
+) {
+    if (!src || width <= 0 || height <= 0 || channels <= 0 || resize_shorter_side <= 0 || crop_size <= 0) {
+        return {};
+    }
+
+    int resized_width = resize_shorter_side;
+    int resized_height = resize_shorter_side;
+    if (width < height) {
+        resized_width = resize_shorter_side;
+        resized_height = static_cast<int>(std::round(static_cast<float>(height) * resize_shorter_side / width));
+    } else {
+        resized_height = resize_shorter_side;
+        resized_width = static_cast<int>(std::round(static_cast<float>(width) * resize_shorter_side / height));
+    }
+    resized_width = std::max(resized_width, crop_size);
+    resized_height = std::max(resized_height, crop_size);
+
+    std::vector<uint8_t> resized_rgb(static_cast<std::size_t>(resized_width) * resized_height * 3);
+    rescale_rgb(src, resized_rgb.data(), width, height, resized_width, resized_height, channels);
+
+    std::vector<uint8_t> cropped_rgb(static_cast<std::size_t>(crop_size) * crop_size * 3);
+    center_crop_rgb(resized_rgb.data(), cropped_rgb.data(), resized_width, resized_height, crop_size, crop_size);
+
+    std::vector<uint8_t> preview_rgba(static_cast<std::size_t>(crop_size) * crop_size * 4);
+    const int pixels = crop_size * crop_size;
+    for (int i = 0; i < pixels; ++i) {
+        preview_rgba[i * 4] = cropped_rgb[i * 3];
+        preview_rgba[i * 4 + 1] = cropped_rgb[i * 3 + 1];
+        preview_rgba[i * 4 + 2] = cropped_rgb[i * 3 + 2];
+        preview_rgba[i * 4 + 3] = 255;
+    }
+    return preview_rgba;
+}

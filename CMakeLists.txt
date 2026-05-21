@@ -5,7 +5,7 @@ set(CMAKE_CXX_STANDARD 17)
 find_package(Python3 REQUIRED COMPONENTS Interpreter)
 
 set(WASM_GPU_BUILD_MODE "cpp-webgpu" CACHE STRING "Build mode: cpp-webgpu, cpp-webgpu-async, cpp-webgpu-dawn, js-webgpu, or dummy")
-set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu cpp-webgpu-async cpp-webgpu-dawn js-webgpu dummy)
+set_property(CACHE WASM_GPU_BUILD_MODE PROPERTY STRINGS cpp-webgpu cpp-webgpu-async cpp-webgpu-dawn resnet50 js-webgpu dummy)
 set(WASM_GPU_PARALLEL_BACKEND "wasm-thread" CACHE STRING "Parallel backend: wasm-thread, pthread, std-thread, tbb, or serial")
 set_property(CACHE WASM_GPU_PARALLEL_BACKEND PROPERTY STRINGS wasm-thread pthread std-thread tbb serial)
 
@@ -42,6 +42,9 @@ set(CMAKE_EXECUTABLE_SUFFIX ".js")
 include_directories(include)
 
 option(WASM_GPU_INCLUDE_RESNET50_DATA "Embed generated network_data/resnet50 files" OFF)
+if(WASM_GPU_BUILD_MODE STREQUAL "resnet50")
+    set(WASM_GPU_INCLUDE_RESNET50_DATA ON)
+endif()
 
 file(GLOB_RECURSE NETWORK_DATA_FILES CONFIGURE_DEPENDS
     "${NETWORK_DATA_DIR}/*.bin"
@@ -115,6 +118,10 @@ elseif(WASM_GPU_BUILD_MODE STREQUAL "dummy")
     set(WASM_GPU_EXTRA_SOURCES)
     set(WASM_GPU_USE_WASM_WEBGPU OFF)
     set(WASM_GPU_USE_JSPI OFF)
+elseif(WASM_GPU_BUILD_MODE STREQUAL "resnet50")
+    set(WASM_GPU_ENGINE_EXTRA_DEFINES BUILD_WASM_WEBGPU_ASYNC BUILD_RESNET50_MODE)
+    set(WASM_GPU_USE_JSPI OFF)
+    set(WASM_GPU_INCLUDE_RESNET50_DATA ON)
 elseif(WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu-async")
     set(WASM_GPU_ENGINE_EXTRA_DEFINES BUILD_WASM_WEBGPU_ASYNC)
     set(WASM_GPU_USE_JSPI OFF)
@@ -125,7 +132,7 @@ elseif(WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu-dawn")
     set(WASM_GPU_USE_EMDAWN_WEBGPU ON)
     set(WASM_GPU_USE_JSPI OFF)
 elseif(NOT WASM_GPU_BUILD_MODE STREQUAL "cpp-webgpu")
-    message(FATAL_ERROR "Unknown WASM_GPU_BUILD_MODE='${WASM_GPU_BUILD_MODE}'. Use cpp-webgpu, cpp-webgpu-async, cpp-webgpu-dawn, js-webgpu, or dummy.")
+    message(FATAL_ERROR "Unknown WASM_GPU_BUILD_MODE='${WASM_GPU_BUILD_MODE}'. Use cpp-webgpu, cpp-webgpu-async, cpp-webgpu-dawn, resnet50, js-webgpu, or dummy.")
 endif()
 
 message(STATUS "WASM GPU build mode: ${WASM_GPU_BUILD_MODE}")
