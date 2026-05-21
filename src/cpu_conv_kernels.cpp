@@ -43,6 +43,18 @@ bool isSupportedShape(const LayerDesc& layer) {
     return false;
 }
 
+std::size_t packedOc4Index(
+    uint32_t in_c,
+    uint32_t kernel_y,
+    uint32_t kernel_x,
+    uint32_t oc_block,
+    uint32_t ic,
+    uint32_t ky,
+    uint32_t kx
+) {
+    return (((static_cast<std::size_t>(oc_block) * in_c + ic) * kernel_y + ky) * kernel_x + kx) * 4;
+}
+
 float convScalarAt(
     const float* input,
     const float* weights,
@@ -112,6 +124,19 @@ v128_t loadOiHwOc4(
     );
 }
 
+v128_t loadPackedOc4(
+    const float* packed_weights,
+    uint32_t in_c,
+    uint32_t kernel_y,
+    uint32_t kernel_x,
+    uint32_t oc_block,
+    uint32_t ic,
+    uint32_t ky,
+    uint32_t kx
+) {
+    return wasm_v128_load(packed_weights + packedOc4Index(in_c, kernel_y, kernel_x, oc_block, ic, ky, kx));
+}
+
 void storeOc4(
     float* output,
     uint32_t out_h,
@@ -135,6 +160,7 @@ void runConvOc4Simd(
     const LayerDesc& layer,
     const float* input,
     const float* weights,
+    const float* packed_weights,
     const float* bias,
     float* output,
     bool use_threads
@@ -154,6 +180,7 @@ void runConvOc4Simd(
         const uint32_t oy = rem / out_w;
         const uint32_t ox = rem % out_w;
         const uint32_t oc = oc_block * 4;
+        const bool use_packed = packed_weights != nullptr;
 
         v128_t sum = wasm_f32x4_make(bias[oc], bias[oc + 1], bias[oc + 2], bias[oc + 3]);
         for (uint32_t ic = 0; ic < in_c; ++ic) {
@@ -173,7 +200,9 @@ void runConvOc4Simd(
                         static_cast<std::size_t>(iy) * in_w +
                         static_cast<std::size_t>(ix);
                     const v128_t input_value = wasm_f32x4_splat(input[input_index]);
-                    const v128_t weight_value = loadOiHwOc4(weights, in_c, layer.kernel_y, layer.kernel_x, oc, ic, ky, kx);
+                    const v128_t weight_value = use_packed
+                        ? loadPackedOc4(packed_weights, in_c, layer.kernel_y, layer.kernel_x, oc_block, ic, ky, kx)
+                        : loadOiHwOc4(weights, in_c, layer.kernel_y, layer.kernel_x, oc, ic, ky, kx);
                     sum = wasm_f32x4_add(sum, wasm_f32x4_mul(input_value, weight_value));
                 }
             }
@@ -216,32 +245,68 @@ void runConvOc4Simd(
 
 } // namespace
 
+bool supportsSpecializedConv2d(const LayerDesc& layer) {
+    if (layer.input_shape.dims.size() != 3 || layer.output_shape.dims.size() != 3) {
+        return false;
+    }
+    return isSupportedShape(layer) && layer.output_shape.dims[0] >= 4;
+}
+
+std::vector<float> packWeightsOc4(const LayerDesc& layer, const std::vector<float>& weights) {
+    if (!supportsSpecializedConv2d(layer)) {
+        return {};
+    }
+
+    const uint32_t in_c = layer.input_shape.dims[0];
+    const uint32_t out_c = layer.output_shape.dims[0];
+    const uint32_t oc4 = out_c / 4;
+    const std::size_t packed_count = static_cast<std::size_t>(oc4) * in_c * layer.kernel_y * layer.kernel_x * 4;
+    std::vector<float> packed(packed_count, 0.0f);
+
+    const std::size_t oc_stride = static_cast<std::size_t>(in_c) * layer.kernel_y * layer.kernel_x;
+    for (uint32_t oc_block = 0; oc_block < oc4; ++oc_block) {
+        const uint32_t oc = oc_block * 4;
+        for (uint32_t ic = 0; ic < in_c; ++ic) {
+            for (uint32_t ky = 0; ky < layer.kernel_y; ++ky) {
+                for (uint32_t kx = 0; kx < layer.kernel_x; ++kx) {
+                    float* dst = packed.data() + packedOc4Index(in_c, layer.kernel_y, layer.kernel_x, oc_block, ic, ky, kx);
+                    const std::size_t inner = static_cast<std::size_t>(ic) * layer.kernel_y * layer.kernel_x +
+                                              static_cast<std::size_t>(ky) * layer.kernel_x +
+                                              kx;
+                    dst[0] = weights[static_cast<std::size_t>(oc) * oc_stride + inner];
+                    dst[1] = weights[static_cast<std::size_t>(oc + 1) * oc_stride + inner];
+                    dst[2] = weights[static_cast<std::size_t>(oc + 2) * oc_stride + inner];
+                    dst[3] = weights[static_cast<std::size_t>(oc + 3) * oc_stride + inner];
+                }
+            }
+        }
+    }
+    return packed;
+}
+
 bool runSpecializedConv2d(
     const LayerDesc& layer,
     const std::vector<float>& input,
     const std::vector<float>& weights,
+    const std::vector<float>* packed_oc4_weights,
     const std::vector<float>& bias,
     bool use_simd,
     bool use_threads,
     std::vector<float>& output
 ) {
-    if (!use_simd || !isSupportedShape(layer)) {
-        return false;
-    }
-    if (layer.input_shape.dims.size() != 3 || layer.output_shape.dims.size() != 3) {
-        return false;
-    }
-    if (layer.output_shape.dims[0] < 4) {
+    if (!use_simd || !supportsSpecializedConv2d(layer)) {
         return false;
     }
 
 #if defined(__wasm_simd128__)
     output.assign(layer.output_shape.elementCount(), 0.0f);
-    runConvOc4Simd(layer, input.data(), weights.data(), bias.data(), output.data(), use_threads);
+    const float* packed = packed_oc4_weights && !packed_oc4_weights->empty() ? packed_oc4_weights->data() : nullptr;
+    runConvOc4Simd(layer, input.data(), weights.data(), packed, bias.data(), output.data(), use_threads);
     return true;
 #else
     (void)input;
     (void)weights;
+    (void)packed_oc4_weights;
     (void)bias;
     (void)use_threads;
     (void)output;

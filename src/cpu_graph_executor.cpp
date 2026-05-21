@@ -8,6 +8,7 @@
 #include <cmath>
 #include <limits>
 #include <map>
+#include <utility>
 
 namespace network {
 namespace {
@@ -37,6 +38,8 @@ void runRange(std::size_t begin, std::size_t end, std::size_t grain_size, bool u
 
 std::vector<float> runConv2d(
     const ModelDesc& model,
+    const std::vector<cpu_conv::PackedConvWeights>& packed_conv_weights,
+    int layer_index,
     const LayerDesc& layer,
     const std::vector<float>& input,
     const CpuGraphOptions& options,
@@ -59,7 +62,23 @@ std::vector<float> runConv2d(
     const uint32_t out_w = layer.output_shape.dims[2];
 
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
-    if (cpu_conv::runSpecializedConv2d(layer, input, *weights, *bias, options.use_simd, options.use_threads, output)) {
+    const std::vector<float>* packed_oc4_weights = nullptr;
+    for (const cpu_conv::PackedConvWeights& packed : packed_conv_weights) {
+        if (packed.layer_index == layer_index) {
+            packed_oc4_weights = &packed.oc4_weights;
+            break;
+        }
+    }
+    if (cpu_conv::runSpecializedConv2d(
+        layer,
+        input,
+        *weights,
+        packed_oc4_weights,
+        *bias,
+        options.use_simd,
+        options.use_threads,
+        output
+    )) {
         return output;
     }
 
@@ -257,6 +276,7 @@ bool validateLayerWeights(const ModelDesc& model, const LayerDesc& layer, std::s
 bool CpuGraphExecutor::configure(const ModelDesc& model) {
     model_ = nullptr;
     error_.clear();
+    packed_conv_weights_.clear();
 
     if (!model.valid()) {
         error_ = model.error.empty() ? "Invalid model" : model.error;
@@ -266,6 +286,23 @@ bool CpuGraphExecutor::configure(const ModelDesc& model) {
     for (const LayerDesc& layer : model.layers) {
         if (!validateLayerWeights(model, layer, error_)) {
             return false;
+        }
+    }
+
+    for (std::size_t layer_index = 0; layer_index < model.layers.size(); ++layer_index) {
+        const LayerDesc& layer = model.layers[layer_index];
+        if (layer.type != LayerType::Conv2D || !cpu_conv::supportsSpecializedConv2d(layer)) {
+            continue;
+        }
+        const ModelWeight* weights = model.weight(layer.weights_index);
+        if (!weights) {
+            continue;
+        }
+        cpu_conv::PackedConvWeights packed;
+        packed.layer_index = static_cast<int>(layer_index);
+        packed.oc4_weights = cpu_conv::packWeightsOc4(layer, weights->values);
+        if (!packed.oc4_weights.empty()) {
+            packed_conv_weights_.push_back(std::move(packed));
         }
     }
 
@@ -289,7 +326,8 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
     tensors[model_->input_name] = input;
     std::string error;
 
-    for (const LayerDesc& layer : model_->layers) {
+    for (std::size_t layer_index = 0; layer_index < model_->layers.size(); ++layer_index) {
+        const LayerDesc& layer = model_->layers[layer_index];
         if (layer.input_names.empty() || layer.output_names.empty()) {
             return {};
         }
@@ -303,7 +341,7 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
         std::vector<float> output;
         switch (layer.type) {
             case LayerType::Conv2D:
-                output = runConv2d(*model_, layer, first_input, options, error);
+                output = runConv2d(*model_, packed_conv_weights_, static_cast<int>(layer_index), layer, first_input, options, error);
                 break;
             case LayerType::Relu:
                 output = runRelu(layer, first_input, options);

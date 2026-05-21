@@ -1,5 +1,6 @@
 #pragma once
 
+#include "cpu_conv_kernels.h"
 #include "model_loader.h"
 
 #include <cstdint>
@@ -28,6 +29,7 @@ public:
 private:
     const ModelDesc* model_ = nullptr;
     std::string error_;
+    std::vector<cpu_conv::PackedConvWeights> packed_conv_weights_;
 };
 
 int argmax(const std::vector<float>& values);
