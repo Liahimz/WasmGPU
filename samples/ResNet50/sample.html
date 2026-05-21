@@ -8,6 +8,7 @@
     #output { margin-top: 2em; }
     .controls { display: flex; gap: 1em; align-items: center; flex-wrap: wrap; }
     input[type="number"] { width: 6em; }
+    select { min-width: 12em; }
   </style>
 </head>
 <body>
@@ -17,6 +18,14 @@
     <label>
       Runs
       <input type="number" id="benchmark_runs" min="1" max="20" value="1" />
+    </label>
+    <label>
+      CPU
+      <select id="cpu_benchmark_mode">
+        <option value="fast" selected>SIMD threads only</option>
+        <option value="full">Full scalar/SIMD/threads</option>
+        <option value="none">GPU only</option>
+      </select>
     </label>
     <button id="button_start">Process</button>
   </div>

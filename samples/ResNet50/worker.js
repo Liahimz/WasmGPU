@@ -108,6 +108,7 @@ onmessage = async function(msg) {
     const height = msg.data.height;
     const channels = msg.data.channels || 4;
     const repetitions = Math.max(1, Math.min(20, msg.data.repetitions || 1));
+    const cpuMode = msg.data.cpuMode || "fast";
 
     const cppVec = new moduleObject.Uint8Vector();
     for (let i = 0; i < arr.length; ++i) {
@@ -142,23 +143,30 @@ onmessage = async function(msg) {
         preprocessedHeight = gpuRun.height;
       }
 
-      const cpuScalar = timedCpuRun("cpu_scalar", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 0));
-      const cpuSimd = timedCpuRun("cpu_simd", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 1));
-      const cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 2));
-      cpuScalarRuns.push(cpuScalar);
-      cpuSimdRuns.push(cpuSimd);
-      cpuSimdThreadsRuns.push(cpuSimdThreads);
+      let cpuScalar = null;
+      let cpuSimd = null;
+      let cpuSimdThreads = null;
+      if (cpuMode === "full") {
+        cpuScalar = timedCpuRun("cpu_scalar", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 0));
+        cpuSimd = timedCpuRun("cpu_simd", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 1));
+        cpuScalarRuns.push(cpuScalar);
+        cpuSimdRuns.push(cpuSimd);
+      }
+      if (cpuMode !== "none") {
+        cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 2));
+        cpuSimdThreadsRuns.push(cpuSimdThreads);
+      }
       cpuPredictions = {
-        scalar: cpuScalar.prediction,
-        simd: cpuSimd.prediction,
-        simdThreads: cpuSimdThreads.prediction,
+        scalar: cpuScalar ? cpuScalar.prediction : null,
+        simd: cpuSimd ? cpuSimd.prediction : null,
+        simdThreads: cpuSimdThreads ? cpuSimdThreads.prediction : null,
       };
       cpuClassLabels = {
-        scalar: cpuScalar.classLabel,
-        simd: cpuSimd.classLabel,
-        simdThreads: cpuSimdThreads.classLabel,
+        scalar: cpuScalar ? cpuScalar.classLabel : "",
+        simd: cpuSimd ? cpuSimd.classLabel : "",
+        simdThreads: cpuSimdThreads ? cpuSimdThreads.classLabel : "",
       };
-      cpuTopK = cpuSimdThreads.topK || cpuSimd.topK || cpuScalar.topK;
+      cpuTopK = (cpuSimdThreads && cpuSimdThreads.topK) || (cpuSimd && cpuSimd.topK) || (cpuScalar && cpuScalar.topK) || "";
     }
 
     postMessage({
@@ -176,10 +184,10 @@ onmessage = async function(msg) {
       webgpuReady: engineInstance.webgpuReady(),
       benchmarkStats: [
         summarizeRuns("gpu", gpuRuns),
-        summarizeRuns("cpu_scalar", cpuScalarRuns),
-        summarizeRuns("cpu_simd", cpuSimdRuns),
-        summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns),
-      ],
+        cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,
+        cpuSimdRuns.length ? summarizeRuns("cpu_simd", cpuSimdRuns) : null,
+        cpuSimdThreadsRuns.length ? summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns) : null,
+      ].filter(Boolean),
     }, preprocessedImage ? [preprocessedImage.buffer] : []);
     cppVec.delete();
   } catch (err) {

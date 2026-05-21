@@ -2,6 +2,7 @@ const selectFile = document.getElementById("select_file");
 const startButton = document.getElementById("button_start");
 const outputDiv = document.getElementById("output");
 const benchmarkRunsInput = document.getElementById("benchmark_runs");
+const cpuBenchmarkModeSelect = document.getElementById("cpu_benchmark_mode");
 let selectedFile = null;
 let worker = null;
 let mainRuntimePromise = null;
@@ -89,6 +90,7 @@ function loadImagePayload(file) {
           height: img.height,
           channels,
           repetitions,
+          cpuMode: cpuBenchmarkModeSelect ? cpuBenchmarkModeSelect.value : "fast",
         });
       };
       img.src = event.target.result;
@@ -231,6 +233,16 @@ function timedCpuRun(name, run, fn) {
   };
 }
 
+function shouldRunCpuMode(payload, mode) {
+  if (payload.cpuMode === "none") {
+    return false;
+  }
+  if (payload.cpuMode === "full") {
+    return true;
+  }
+  return mode === "simd_threads";
+}
+
 async function runOnMainThread(payload) {
   const { Module, engine } = await getMainRuntime();
   const cppVec = new Module.Uint8Vector();
@@ -269,29 +281,38 @@ async function runOnMainThread(payload) {
         preprocessedHeight = gpuRun.height;
       }
 
-      const cpuScalar = timedCpuRun("cpu_scalar", run, () =>
-        engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 0)
-      );
-      const cpuSimd = timedCpuRun("cpu_simd", run, () =>
-        engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 1)
-      );
-      const cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () =>
-        engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 2)
-      );
-      cpuScalarRuns.push(cpuScalar);
-      cpuSimdRuns.push(cpuSimd);
-      cpuSimdThreadsRuns.push(cpuSimdThreads);
+      let cpuScalar = null;
+      let cpuSimd = null;
+      let cpuSimdThreads = null;
+      if (shouldRunCpuMode(payload, "scalar")) {
+        cpuScalar = timedCpuRun("cpu_scalar", run, () =>
+          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 0)
+        );
+        cpuScalarRuns.push(cpuScalar);
+      }
+      if (shouldRunCpuMode(payload, "simd")) {
+        cpuSimd = timedCpuRun("cpu_simd", run, () =>
+          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 1)
+        );
+        cpuSimdRuns.push(cpuSimd);
+      }
+      if (shouldRunCpuMode(payload, "simd_threads")) {
+        cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () =>
+          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 2)
+        );
+        cpuSimdThreadsRuns.push(cpuSimdThreads);
+      }
       cpuPredictions = {
-        scalar: cpuScalar.prediction,
-        simd: cpuSimd.prediction,
-        simdThreads: cpuSimdThreads.prediction,
+        scalar: cpuScalar ? cpuScalar.prediction : null,
+        simd: cpuSimd ? cpuSimd.prediction : null,
+        simdThreads: cpuSimdThreads ? cpuSimdThreads.prediction : null,
       };
       cpuClassLabels = {
-        scalar: cpuScalar.classLabel,
-        simd: cpuSimd.classLabel,
-        simdThreads: cpuSimdThreads.classLabel,
+        scalar: cpuScalar ? cpuScalar.classLabel : "",
+        simd: cpuSimd ? cpuSimd.classLabel : "",
+        simdThreads: cpuSimdThreads ? cpuSimdThreads.classLabel : "",
       };
-      cpuTopK = cpuSimdThreads.topK || cpuSimd.topK || cpuScalar.topK;
+      cpuTopK = (cpuSimdThreads && cpuSimdThreads.topK) || (cpuSimd && cpuSimd.topK) || (cpuScalar && cpuScalar.topK) || "";
     }
 
     return {
@@ -309,10 +330,10 @@ async function runOnMainThread(payload) {
       webgpuReady: engine.webgpuReady(),
       benchmarkStats: [
         summarizeRuns("gpu", gpuRuns),
-        summarizeRuns("cpu_scalar", cpuScalarRuns),
-        summarizeRuns("cpu_simd", cpuSimdRuns),
-        summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns),
-      ],
+        cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,
+        cpuSimdRuns.length ? summarizeRuns("cpu_simd", cpuSimdRuns) : null,
+        cpuSimdThreadsRuns.length ? summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns) : null,
+      ].filter(Boolean),
     };
   } finally {
     cppVec.delete();
@@ -326,6 +347,9 @@ function appendText(label, value) {
 }
 
 function predictionText(id, label) {
+  if (id === null || id === undefined) {
+    return "skipped";
+  }
   return label ? `${id} ${label}` : `${id}`;
 }
 
