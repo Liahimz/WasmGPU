@@ -97,12 +97,29 @@ def export_folded_conv_npz(out_dir, cache_dir, weights):
             }
         )
 
+    fc_weight = model.fc.weight.detach().cpu().numpy().astype("<f4")
+    fc_bias = model.fc.bias.detach().cpu().numpy().astype("<f4")
+    arrays["fc_weights"] = fc_weight
+    arrays["fc_bias"] = fc_bias
+    fc_weight.tofile(out_dir / "fc_weights.bin")
+    fc_bias.tofile(out_dir / "fc_bias.bin")
+    linear_metadata = {
+        "name": "fc",
+        "weights": "fc_weights.bin",
+        "weights_shape": list(fc_weight.shape),
+        "bias": "fc_bias.bin",
+        "bias_shape": list(fc_bias.shape),
+        "in_features": int(fc_weight.shape[1]),
+        "out_features": int(fc_weight.shape[0]),
+    }
+
     suffix = "imagenet" if weights == "imagenet" else "random"
     npz_path = out_dir / f"resnet50_folded_conv_bn_{suffix}.npz"
     meta_path = out_dir / f"resnet50_folded_conv_bn_{suffix}.json"
     np.savez(npz_path, **arrays)
-    meta_path.write_text(json.dumps({"folded_convs": metadata}, indent=2) + "\n")
+    meta_path.write_text(json.dumps({"folded_convs": metadata, "linear": linear_metadata}, indent=2) + "\n")
     print(f"Exported {len(metadata)} folded conv+bn pairs")
+    print("Exported final fc linear weights")
     print(f"Wrote raw folded .bin tensors to {out_dir}")
     print(f"Wrote {npz_path}")
     print(f"Wrote {meta_path}")
@@ -115,15 +132,14 @@ def network_data_name(path):
         return path.name
 
 
-def load_folded_metadata(out_dir, weights):
+def load_export_metadata(out_dir, weights):
     suffix = "imagenet" if weights == "imagenet" else "random"
     meta_path = out_dir / f"resnet50_folded_conv_bn_{suffix}.json"
     if not meta_path.exists():
         raise FileNotFoundError(
             f"Missing {meta_path}. Run with --export-folded-convs first, or use it in the same command."
         )
-    data = json.loads(meta_path.read_text())
-    return {item["name"]: item for item in data["folded_convs"]}
+    return json.loads(meta_path.read_text())
 
 
 def conv_layer(metadata, name, input_name, output_name):
@@ -176,17 +192,85 @@ def maxpool_layer(name, input_name, output_name, kernel, stride, padding):
     }
 
 
-def prepare_metadata_for_manifest(metadata, out_dir):
+def global_avg_pool_layer(name, input_name, output_name):
+    return {
+        "name": name,
+        "type": "global_avg_pool2d",
+        "input": input_name,
+        "output": output_name,
+    }
+
+
+def flatten_layer(name, input_name, output_name):
+    return {
+        "name": name,
+        "type": "flatten",
+        "input": input_name,
+        "output": output_name,
+    }
+
+
+def linear_layer(linear_metadata, input_name, output_name):
+    return {
+        "name": linear_metadata["name"],
+        "type": "linear",
+        "input": input_name,
+        "output": output_name,
+        "in_features": linear_metadata["in_features"],
+        "out_features": linear_metadata["out_features"],
+        "weights": linear_metadata["weights_embedded"],
+        "weights_shape": linear_metadata["weights_shape"],
+        "bias": linear_metadata["bias_embedded"],
+        "bias_shape": linear_metadata["bias_shape"],
+    }
+
+
+def prepare_metadata_for_manifest(export_metadata, out_dir):
     prepared = {}
-    for name, item in metadata.items():
+    for item in export_metadata["folded_convs"]:
         copied = dict(item)
         copied["weights_embedded"] = network_data_name(out_dir / item["weights"])
         copied["bias_embedded"] = network_data_name(out_dir / item["bias"])
-        prepared[name] = copied
-    return prepared
+        prepared[item["name"]] = copied
+
+    linear = None
+    if "linear" in export_metadata:
+        linear = dict(export_metadata["linear"])
+        linear["weights_embedded"] = network_data_name(out_dir / linear["weights"])
+        linear["bias_embedded"] = network_data_name(out_dir / linear["bias"])
+
+    return prepared, linear
 
 
-def build_manifest_slice(metadata, slice_name):
+def append_bottleneck_block(layers, metadata, layer_name, block_index, input_name):
+    base = f"{layer_name}_block{block_index}"
+    layers.extend(
+        [
+            conv_layer(metadata, f"{base}_conv1", input_name, f"{base}_conv1"),
+            relu_layer(f"{base}_relu1", f"{base}_conv1", f"{base}_relu1"),
+            conv_layer(metadata, f"{base}_conv2", f"{base}_relu1", f"{base}_conv2"),
+            relu_layer(f"{base}_relu2", f"{base}_conv2", f"{base}_relu2"),
+            conv_layer(metadata, f"{base}_conv3", f"{base}_relu2", f"{base}_main"),
+        ]
+    )
+
+    downsample_name = f"{base}_downsample"
+    if downsample_name in metadata:
+        skip_name = f"{base}_skip"
+        layers.append(conv_layer(metadata, downsample_name, input_name, skip_name))
+    else:
+        skip_name = input_name
+
+    layers.extend(
+        [
+            add_layer(f"{base}_add", f"{base}_main", skip_name, f"{base}_add"),
+            relu_layer(f"{base}_relu3", f"{base}_add", f"{base}_out"),
+        ]
+    )
+    return f"{base}_out"
+
+
+def build_manifest_slice(metadata, linear_metadata, slice_name):
     layers = [
         conv_layer(metadata, "conv1", "input", "stem_conv"),
         relu_layer("stem_relu", "stem_conv", "stem_relu"),
@@ -194,17 +278,19 @@ def build_manifest_slice(metadata, slice_name):
     ]
 
     if slice_name == "stem-layer1-block0":
-        block_input = "stem_pool"
+        append_bottleneck_block(layers, metadata, "layer1", 0, "stem_pool")
+    elif slice_name == "full":
+        if linear_metadata is None:
+            raise ValueError("Full ResNet50 manifest requires fc metadata. Rerun --export-folded-convs with the current exporter.")
+        current = "stem_pool"
+        for layer_name, block_count in (("layer1", 3), ("layer2", 4), ("layer3", 6), ("layer4", 3)):
+            for block_index in range(block_count):
+                current = append_bottleneck_block(layers, metadata, layer_name, block_index, current)
         layers.extend(
             [
-                conv_layer(metadata, "layer1_block0_conv1", block_input, "layer1_block0_conv1"),
-                relu_layer("layer1_block0_relu1", "layer1_block0_conv1", "layer1_block0_relu1"),
-                conv_layer(metadata, "layer1_block0_conv2", "layer1_block0_relu1", "layer1_block0_conv2"),
-                relu_layer("layer1_block0_relu2", "layer1_block0_conv2", "layer1_block0_relu2"),
-                conv_layer(metadata, "layer1_block0_conv3", "layer1_block0_relu2", "layer1_block0_main"),
-                conv_layer(metadata, "layer1_block0_downsample", block_input, "layer1_block0_skip"),
-                add_layer("layer1_block0_add", "layer1_block0_main", "layer1_block0_skip", "layer1_block0_add"),
-                relu_layer("layer1_block0_relu3", "layer1_block0_add", "layer1_block0_out"),
+                global_avg_pool_layer("avgpool", current, "avgpool"),
+                flatten_layer("flatten", "avgpool", "flatten"),
+                linear_layer(linear_metadata, "flatten", "logits"),
             ]
         )
     elif slice_name != "stem":
@@ -221,8 +307,8 @@ def build_manifest_slice(metadata, slice_name):
 
 
 def export_manifest_slice(out_dir, weights, slice_name):
-    metadata = prepare_metadata_for_manifest(load_folded_metadata(out_dir, weights), out_dir)
-    manifest = build_manifest_slice(metadata, slice_name)
+    metadata, linear_metadata = prepare_metadata_for_manifest(load_export_metadata(out_dir, weights), out_dir)
+    manifest = build_manifest_slice(metadata, linear_metadata, slice_name)
     manifest_path = out_dir / f"{manifest['name']}_manifest.json"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     print(f"Wrote {manifest_path}")
@@ -271,7 +357,7 @@ def main():
     parser.add_argument("--weights", choices=["imagenet", "random"], default="imagenet", help="Use pretrained ImageNet weights or random torchvision initialization.")
     parser.add_argument("--verify-folding", action="store_true", help="Run a deterministic Conv2d+BatchNorm folding self-check.")
     parser.add_argument("--export-folded-convs", "--export-folded-conv", action="store_true", help="Load pretrained torchvision ResNet50 and export folded conv weights to NPZ/raw bins.")
-    parser.add_argument("--export-manifest-slice", choices=["stem", "stem-layer1-block0"], help="Write a static graph manifest for an incremental ResNet50 slice.")
+    parser.add_argument("--export-manifest-slice", choices=["stem", "stem-layer1-block0", "full"], help="Write a static graph manifest for an incremental ResNet50 slice.")
     parser.add_argument("--seed", type=int, default=1234)
     args = parser.parse_args()
 

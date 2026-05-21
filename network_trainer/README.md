@@ -61,4 +61,5 @@ To create the first static graph bring-up manifests:
 ```bash
 python3 network_trainer/export_resnet50.py --export-manifest-slice stem
 python3 network_trainer/export_resnet50.py --export-manifest-slice stem-layer1-block0
+python3 network_trainer/export_resnet50.py --export-manifest-slice full
 ```
