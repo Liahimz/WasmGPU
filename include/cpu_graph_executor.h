@@ -8,15 +8,20 @@
 
 namespace network {
 
+struct CpuGraphOptions {
+    bool use_simd = false;
+    bool use_threads = false;
+};
+
 class CpuGraphExecutor {
 public:
     bool configure(const ModelDesc& model);
     bool ready() const;
 
-    std::vector<float> infer(const std::vector<float>& input) const;
-    std::vector<float> inferBytes(const std::vector<uint8_t>& input) const;
-    int inferClass(const std::vector<float>& input) const;
-    int inferClassBytes(const std::vector<uint8_t>& input) const;
+    std::vector<float> infer(const std::vector<float>& input, CpuGraphOptions options = {}) const;
+    std::vector<float> inferBytes(const std::vector<uint8_t>& input, CpuGraphOptions options = {}) const;
+    int inferClass(const std::vector<float>& input, CpuGraphOptions options = {}) const;
+    int inferClassBytes(const std::vector<uint8_t>& input, CpuGraphOptions options = {}) const;
 
     const std::string& error() const;
 

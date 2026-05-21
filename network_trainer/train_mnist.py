@@ -35,14 +35,20 @@ MNIST_MIRRORS = [
 class TinyLeNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv = nn.Conv2d(1, 4, kernel_size=3, stride=1, padding=0)
+        self.conv0 = nn.Conv2d(1, 8, kernel_size=3, stride=1, padding=1)
+        self.conv1 = nn.Conv2d(8, 16, kernel_size=3, stride=1, padding=1)
         self.relu = nn.ReLU()
-        self.linear = nn.Linear(26 * 26 * 4, 10)
+        self.pool = nn.MaxPool2d(kernel_size=2, stride=2)
+        self.linear0 = nn.Linear(16 * 14 * 14, 64)
+        self.linear1 = nn.Linear(64, 10)
 
     def forward(self, x):
-        x = self.relu(self.conv(x))
+        x = self.relu(self.conv0(x))
+        x = self.relu(self.conv1(x))
+        x = self.pool(x)
         x = torch.flatten(x, start_dim=1)
-        return self.linear(x)
+        x = self.linear0(x)
+        return self.linear1(x)
 
 
 class MnistDataset(Dataset):
@@ -128,31 +134,47 @@ def export_weights(model, out_dir):
     out_dir.mkdir(parents=True, exist_ok=True)
     model = model.cpu().eval()
 
-    conv_weights = model.conv.weight.detach().numpy().astype("<f4").reshape(4, 3, 3)
-    conv_bias = model.conv.bias.detach().numpy().astype("<f4")
-    linear_weights = model.linear.weight.detach().numpy().astype("<f4")
-    linear_bias = model.linear.bias.detach().numpy().astype("<f4")
+    conv0_weights = model.conv0.weight.detach().numpy().astype("<f4")
+    conv0_bias = model.conv0.bias.detach().numpy().astype("<f4")
+    conv1_weights = model.conv1.weight.detach().numpy().astype("<f4")
+    conv1_bias = model.conv1.bias.detach().numpy().astype("<f4")
+    linear0_weights = model.linear0.weight.detach().numpy().astype("<f4")
+    linear0_bias = model.linear0.bias.detach().numpy().astype("<f4")
+    linear1_weights = model.linear1.weight.detach().numpy().astype("<f4")
+    linear1_bias = model.linear1.bias.detach().numpy().astype("<f4")
 
     paths = {
-        "conv_weights": out_dir / "tiny_lenet_conv_weights_f32.bin",
-        "conv_bias": out_dir / "tiny_lenet_conv_bias_f32.bin",
-        "linear_weights": out_dir / "tiny_lenet_linear_weights_f32.bin",
-        "linear_bias": out_dir / "tiny_lenet_linear_bias_f32.bin",
+        "conv0_weights": out_dir / "tiny_lenet_conv0_weights_f32.bin",
+        "conv0_bias": out_dir / "tiny_lenet_conv0_bias_f32.bin",
+        "conv1_weights": out_dir / "tiny_lenet_conv1_weights_f32.bin",
+        "conv1_bias": out_dir / "tiny_lenet_conv1_bias_f32.bin",
+        "linear0_weights": out_dir / "tiny_lenet_linear0_weights_f32.bin",
+        "linear0_bias": out_dir / "tiny_lenet_linear0_bias_f32.bin",
+        "linear1_weights": out_dir / "tiny_lenet_linear1_weights_f32.bin",
+        "linear1_bias": out_dir / "tiny_lenet_linear1_bias_f32.bin",
         "npz": out_dir / "tiny_lenet_weights.npz",
         "manifest": out_dir / "tiny_lenet_manifest.json",
     }
 
-    conv_weights.tofile(paths["conv_weights"])
-    conv_bias.tofile(paths["conv_bias"])
-    linear_weights.tofile(paths["linear_weights"])
-    linear_bias.tofile(paths["linear_bias"])
+    conv0_weights.tofile(paths["conv0_weights"])
+    conv0_bias.tofile(paths["conv0_bias"])
+    conv1_weights.tofile(paths["conv1_weights"])
+    conv1_bias.tofile(paths["conv1_bias"])
+    linear0_weights.tofile(paths["linear0_weights"])
+    linear0_bias.tofile(paths["linear0_bias"])
+    linear1_weights.tofile(paths["linear1_weights"])
+    linear1_bias.tofile(paths["linear1_bias"])
 
     np.savez(
         paths["npz"],
-        conv_weights=conv_weights,
-        conv_bias=conv_bias,
-        linear_weights=linear_weights,
-        linear_bias=linear_bias,
+        conv0_weights=conv0_weights,
+        conv0_bias=conv0_bias,
+        conv1_weights=conv1_weights,
+        conv1_bias=conv1_bias,
+        linear0_weights=linear0_weights,
+        linear0_bias=linear0_bias,
+        linear1_weights=linear1_weights,
+        linear1_bias=linear1_bias,
     )
 
     manifest = {
@@ -165,19 +187,44 @@ def export_weights(model, out_dir):
                 "name": "conv0",
                 "type": "conv2d",
                 "in_channels": 1,
-                "out_channels": 4,
+                "out_channels": 8,
                 "kernel": [3, 3],
                 "stride": [1, 1],
-                "padding": [0, 0],
-                "weights": paths["conv_weights"].name,
-                "weights_shape": [4, 1, 3, 3],
-                "bias": paths["conv_bias"].name,
-                "bias_shape": [4],
+                "padding": [1, 1],
+                "weights": paths["conv0_weights"].name,
+                "weights_shape": [8, 1, 3, 3],
+                "bias": paths["conv0_bias"].name,
+                "bias_shape": [8],
             },
             {
                 "name": "relu0",
                 "type": "relu",
-                "shape": [4, 26, 26],
+                "shape": [8, 28, 28],
+            },
+            {
+                "name": "conv1",
+                "type": "conv2d",
+                "in_channels": 8,
+                "out_channels": 16,
+                "kernel": [3, 3],
+                "stride": [1, 1],
+                "padding": [1, 1],
+                "weights": paths["conv1_weights"].name,
+                "weights_shape": [16, 8, 3, 3],
+                "bias": paths["conv1_bias"].name,
+                "bias_shape": [16],
+            },
+            {
+                "name": "relu1",
+                "type": "relu",
+                "shape": [16, 28, 28],
+            },
+            {
+                "name": "maxpool0",
+                "type": "maxpool2d",
+                "kernel": [2, 2],
+                "stride": [2, 2],
+                "padding": [0, 0],
             },
             {
                 "name": "flatten0",
@@ -186,11 +233,21 @@ def export_weights(model, out_dir):
             {
                 "name": "linear0",
                 "type": "linear",
-                "in_features": 2704,
+                "in_features": 3136,
+                "out_features": 64,
+                "weights": paths["linear0_weights"].name,
+                "weights_shape": [64, 3136],
+                "bias": paths["linear0_bias"].name,
+                "bias_shape": [64],
+            },
+            {
+                "name": "linear1",
+                "type": "linear",
+                "in_features": 64,
                 "out_features": 10,
-                "weights": paths["linear_weights"].name,
-                "weights_shape": [10, 2704],
-                "bias": paths["linear_bias"].name,
+                "weights": paths["linear1_weights"].name,
+                "weights_shape": [10, 64],
+                "bias": paths["linear1_bias"].name,
                 "bias_shape": [10],
             },
         ],

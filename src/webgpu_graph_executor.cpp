@@ -3,6 +3,7 @@
 #include "cpu_graph_executor.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cstring>
 #include <iostream>
 #include <limits>
@@ -20,6 +21,8 @@ struct WebGpuGraphExecutor::Impl {
     bool resources_ready = false;
     bool inference_pending = false;
     int latest_prediction = -1;
+    double pending_start_ms = 0.0;
+    double pending_submit_ms = 0.0;
 
 #if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
     WGPUDevice device = nullptr;
@@ -73,6 +76,12 @@ struct WebGpuGraphExecutor::Impl {
 namespace {
 
 #if defined(__EMSCRIPTEN__)
+using Clock = std::chrono::high_resolution_clock;
+
+double nowMs() {
+    return std::chrono::duration<double, std::milli>(Clock::now().time_since_epoch()).count();
+}
+
 uint64_t byteSize(const TensorShape& shape) {
     return static_cast<uint64_t>(shape.elementCount() * sizeof(float));
 }
@@ -190,6 +199,12 @@ void onGraphReadbackMapped(WGPUMapAsyncStatus, WGPUStringView, void* userdata1, 
         return;
     }
     impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->tensors.back().size);
+    const double total_ms = nowMs() - impl->pending_start_ms;
+    std::cout << "[timing] dawn_gpu_graph_detail"
+              << " submit=" << impl->pending_submit_ms
+              << "ms total_inference=" << total_ms
+              << "ms prediction=" << impl->latest_prediction
+              << std::endl;
     impl->inference_pending = false;
 }
 #elif defined(__EMSCRIPTEN__)
@@ -281,6 +296,12 @@ void onGraphReadbackMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, dou
         return;
     }
     impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->tensors.back().size);
+    const double total_ms = nowMs() - impl->pending_start_ms;
+    std::cout << "[timing] gpu_graph_detail"
+              << " submit=" << impl->pending_submit_ms
+              << "ms total_inference=" << total_ms
+              << "ms prediction=" << impl->latest_prediction
+              << std::endl;
     impl->inference_pending = false;
 }
 #endif
@@ -653,6 +674,7 @@ int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
         return -1;
     }
 
+    const double start_ms = nowMs();
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(impl_->device, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
     encodeGraphDispatch(*impl_, encoder);
 
@@ -661,6 +683,10 @@ int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
 
     wgpu_buffer_map_sync(impl_->readback, WGPU_MAP_MODE_READ, 0, impl_->tensors.back().size);
     impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->tensors.back().size);
+    std::cout << "[timing] gpu_graph_detail"
+              << " total_inference=" << (nowMs() - start_ms)
+              << "ms prediction=" << impl_->latest_prediction
+              << std::endl;
     return impl_->latest_prediction;
 #else
     (void)input;
@@ -677,6 +703,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
         return -1;
     }
 
+    impl_->pending_start_ms = nowMs();
     WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(impl_->device, nullptr);
     encodeGraphDispatch(*impl_, encoder);
 
@@ -686,6 +713,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
     wgpuCommandBufferRelease(command_buffer);
 
     impl_->inference_pending = true;
+    impl_->pending_submit_ms = nowMs() - impl_->pending_start_ms;
     WGPUBufferMapCallbackInfo callback = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
     callback.mode = WGPUCallbackMode_AllowSpontaneous;
     callback.callback = &onGraphReadbackMapped;
@@ -700,6 +728,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
         return -1;
     }
 
+    impl_->pending_start_ms = nowMs();
     WGpuCommandEncoder encoder = wgpu_device_create_command_encoder(impl_->device, &WGPU_COMMAND_ENCODER_DESCRIPTOR_DEFAULT_INITIALIZER);
     encodeGraphDispatch(*impl_, encoder);
 
@@ -707,6 +736,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
     wgpu_queue_submit_one_and_destroy(impl_->queue, command_buffer);
 
     impl_->inference_pending = true;
+    impl_->pending_submit_ms = nowMs() - impl_->pending_start_ms;
     wgpu_buffer_map_async(
         impl_->readback,
         &onGraphReadbackMapped,

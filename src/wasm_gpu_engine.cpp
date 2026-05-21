@@ -43,9 +43,6 @@ void WasmGpuEngine::configure(int target_size_) {
                   << " input=" << model_.input_shape.toString()
                   << " layers=" << model_.layers.size()
                   << std::endl;
-        if (!cpu_graph_.configure(model_)) {
-            std::cerr << "Failed to configure CPU graph executor: " << cpu_graph_.error() << std::endl;
-        }
     } else {
         std::cerr << "Failed to load embedded model manifest: " << model_.error << std::endl;
     }
@@ -60,7 +57,7 @@ void WasmGpuEngine::configure(int target_size_) {
     }
 
     gpu_.configure(model_.valid() ? &model_ : nullptr, &weights_);
-    cpu_.configure(&weights_);
+    cpu_.configure(model_.valid() ? &model_ : nullptr, &weights_);
     parallel::initialize();
 }
 
@@ -88,30 +85,6 @@ ProcessResult WasmGpuEngine::process(const std::vector<uint8_t>& data, int width
               << "ms prediction=" << result.prediction
               << std::endl;
 #endif
-    return result;
-}
-
-ProcessResult WasmGpuEngine::processCpuGraph(
-    const std::vector<uint8_t>& data,
-    int width,
-    int height,
-    int channels
-) {
-    const auto total_start = Clock::now();
-    const auto preprocess_start = Clock::now();
-    ProcessResult result = preprocess(data, width, height, channels);
-    const auto preprocess_end = Clock::now();
-
-    const auto inference_start = Clock::now();
-    result.prediction = cpu_graph_.ready() ? cpu_graph_.inferClassBytes(result.image) : -1;
-    const auto inference_end = Clock::now();
-
-    std::cout << "[timing] cpu_graph"
-              << " preprocess=" << elapsedMs(preprocess_start, preprocess_end)
-              << "ms inference=" << elapsedMs(inference_start, inference_end)
-              << "ms total=" << elapsedMs(total_start, inference_end)
-              << "ms prediction=" << result.prediction
-              << std::endl;
     return result;
 }
 

@@ -215,14 +215,20 @@ void GpuExecutor::prepareSyntheticLarge() {
 }
 
 bool GpuExecutor::inferencePending() const {
-    if (graph_.ready()) {
+    if (pending_kind_ == 2) {
+        return inference_pending_;
+    }
+    if (pending_kind_ == 1 && graph_.ready()) {
         return graph_.inferencePending();
     }
     return inference_pending_;
 }
 
 int GpuExecutor::latestPrediction() const {
-    if (graph_.ready()) {
+    if (pending_kind_ == 2) {
+        return latest_prediction_;
+    }
+    if (pending_kind_ == 1 && graph_.ready()) {
         return graph_.latestPrediction();
     }
     return latest_prediction_;
@@ -659,6 +665,7 @@ int GpuExecutor::infer(const std::vector<uint8_t>& image) {
         latest_backend_ = "graph";
         const int prediction = graph_.inferClassBytesAsync(image);
         const auto inference_end = Clock::now();
+        pending_kind_ = 1;
         inference_pending_ = graph_.inferencePending();
         std::cout << "[timing] dawn_gpu_graph_async_start"
                   << " submit=" << elapsedMs(inference_start, inference_end)

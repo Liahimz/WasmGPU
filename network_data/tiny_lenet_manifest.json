@@ -12,7 +12,7 @@
       "name": "conv0",
       "type": "conv2d",
       "in_channels": 1,
-      "out_channels": 4,
+      "out_channels": 8,
       "kernel": [
         3,
         3
@@ -22,28 +22,82 @@
         1
       ],
       "padding": [
-        0,
-        0
+        1,
+        1
       ],
-      "weights": "tiny_lenet_conv_weights_f32.bin",
+      "weights": "tiny_lenet_conv0_weights_f32.bin",
       "weights_shape": [
-        4,
+        8,
         1,
         3,
         3
       ],
-      "bias": "tiny_lenet_conv_bias_f32.bin",
+      "bias": "tiny_lenet_conv0_bias_f32.bin",
       "bias_shape": [
-        4
+        8
       ]
     },
     {
       "name": "relu0",
       "type": "relu",
       "shape": [
-        4,
-        26,
-        26
+        8,
+        28,
+        28
+      ]
+    },
+    {
+      "name": "conv1",
+      "type": "conv2d",
+      "in_channels": 8,
+      "out_channels": 16,
+      "kernel": [
+        3,
+        3
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        1,
+        1
+      ],
+      "weights": "tiny_lenet_conv1_weights_f32.bin",
+      "weights_shape": [
+        16,
+        8,
+        3,
+        3
+      ],
+      "bias": "tiny_lenet_conv1_bias_f32.bin",
+      "bias_shape": [
+        16
+      ]
+    },
+    {
+      "name": "relu1",
+      "type": "relu",
+      "shape": [
+        16,
+        28,
+        28
+      ]
+    },
+    {
+      "name": "maxpool0",
+      "type": "maxpool2d",
+      "kernel": [
+        2,
+        2
+      ],
+      "stride": [
+        2,
+        2
+      ],
+      "padding": [
+        0,
+        0
       ]
     },
     {
@@ -53,14 +107,29 @@
     {
       "name": "linear0",
       "type": "linear",
-      "in_features": 2704,
+      "in_features": 3136,
+      "out_features": 64,
+      "weights": "tiny_lenet_linear0_weights_f32.bin",
+      "weights_shape": [
+        64,
+        3136
+      ],
+      "bias": "tiny_lenet_linear0_bias_f32.bin",
+      "bias_shape": [
+        64
+      ]
+    },
+    {
+      "name": "linear1",
+      "type": "linear",
+      "in_features": 64,
       "out_features": 10,
-      "weights": "tiny_lenet_linear_weights_f32.bin",
+      "weights": "tiny_lenet_linear1_weights_f32.bin",
       "weights_shape": [
         10,
-        2704
+        64
       ],
-      "bias": "tiny_lenet_linear_bias_f32.bin",
+      "bias": "tiny_lenet_linear1_bias_f32.bin",
       "bias_shape": [
         10
       ]

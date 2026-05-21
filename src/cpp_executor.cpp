@@ -248,19 +248,38 @@ CppExecutorMode normalizeMode(CppExecutorMode mode) {
 } // namespace
 
 void CppExecutor::configure(const network::TinyLenetWeights* weights) {
+    configure(nullptr, weights);
+}
+
+void CppExecutor::configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights) {
+    model_ = model;
     weights_ = weights;
+    if (model_) {
+        graph_.configure(*model_);
+    }
 }
 
 bool CppExecutor::ready() const {
-    return weights_ && weights_->valid();
+    return graph_.ready() || (weights_ && weights_->valid());
 }
 
 int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) const {
-    if (!ready() || image.size() != InputValues) {
+    if (!ready()) {
         return -1;
     }
 
     mode = normalizeMode(mode);
+
+    if (graph_.ready()) {
+        network::CpuGraphOptions options;
+        options.use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
+        options.use_threads = mode == CppExecutorMode::SimdThreads;
+        return graph_.inferClassBytes(image, options);
+    }
+
+    if (!weights_ || !weights_->valid() || image.size() != InputValues) {
+        return -1;
+    }
 
     std::array<float, InputValues> input{};
     for (std::size_t i = 0; i < input.size(); ++i) {

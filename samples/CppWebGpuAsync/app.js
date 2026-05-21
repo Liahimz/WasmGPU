@@ -135,7 +135,7 @@ worker.onmessage = function(e) {
     if (cpuPredictions) {
       let cpuPredictionText = document.createElement("div");
       cpuPredictionText.textContent =
-        `CPU graph/scalar/simd/simd_threads: ${cpuPredictions.graph} / ${cpuPredictions.scalar} / ${cpuPredictions.simd} / ${cpuPredictions.simdThreads}`;
+        `CPU scalar/simd/simd_threads: ${cpuPredictions.scalar} / ${cpuPredictions.simd} / ${cpuPredictions.simdThreads}`;
       outputDiv.appendChild(cpuPredictionText);
     }
     if (largeCpuPredictions) {

@@ -6,6 +6,10 @@
 #include <cmath>
 #include <limits>
 
+#if defined(__wasm_simd128__)
+#include <wasm_simd128.h>
+#endif
+
 namespace network {
 namespace {
 
@@ -18,7 +22,58 @@ const std::vector<float>* requireWeight(const ModelDesc& model, int index, std::
     return &weight->values;
 }
 
-std::vector<float> runConv2d(const ModelDesc& model, const LayerDesc& layer, const std::vector<float>& input, std::string& error) {
+template <typename Body>
+void runRange(std::size_t begin, std::size_t end, std::size_t grain_size, bool use_threads, const Body& body) {
+    if (use_threads) {
+        parallel::parallelFor(begin, end, grain_size, [&](std::size_t index) {
+            body(index);
+        });
+        return;
+    }
+
+    for (std::size_t index = begin; index < end; ++index) {
+        body(index);
+    }
+}
+
+float dotProductScalar(const float* left, const float* right, uint32_t count) {
+    float sum = 0.0f;
+    for (uint32_t i = 0; i < count; ++i) {
+        sum += left[i] * right[i];
+    }
+    return sum;
+}
+
+float dotProductSimd(const float* left, const float* right, uint32_t count) {
+#if defined(__wasm_simd128__)
+    v128_t acc = wasm_f32x4_splat(0.0f);
+    uint32_t i = 0;
+    for (; i + 4 <= count; i += 4) {
+        const v128_t a = wasm_v128_load(left + i);
+        const v128_t b = wasm_v128_load(right + i);
+        acc = wasm_f32x4_add(acc, wasm_f32x4_mul(a, b));
+    }
+
+    alignas(16) float lanes[4];
+    wasm_v128_store(lanes, acc);
+    float sum = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+
+    for (; i < count; ++i) {
+        sum += left[i] * right[i];
+    }
+    return sum;
+#else
+    return dotProductScalar(left, right, count);
+#endif
+}
+
+std::vector<float> runConv2d(
+    const ModelDesc& model,
+    const LayerDesc& layer,
+    const std::vector<float>& input,
+    const CpuGraphOptions& options,
+    std::string& error
+) {
     const std::vector<float>* weights = requireWeight(model, layer.weights_index, error, "conv2d");
     if (!weights) {
         return {};
@@ -39,7 +94,7 @@ std::vector<float> runConv2d(const ModelDesc& model, const LayerDesc& layer, con
     const std::size_t plane = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t total = static_cast<std::size_t>(out_c) * plane;
 
-    parallel::parallelFor(0, total, 64, [&](std::size_t index) {
+    runRange(0, total, 64, options.use_threads, [&](std::size_t index) {
         const uint32_t oc = static_cast<uint32_t>(index / plane);
         const uint32_t rem = static_cast<uint32_t>(index % plane);
         const uint32_t oy = rem / out_w;
@@ -75,15 +130,15 @@ std::vector<float> runConv2d(const ModelDesc& model, const LayerDesc& layer, con
     return output;
 }
 
-std::vector<float> runRelu(const LayerDesc& layer, const std::vector<float>& input) {
+std::vector<float> runRelu(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
-    parallel::parallelFor(0, output.size(), 256, [&](std::size_t index) {
+    runRange(0, output.size(), 256, options.use_threads, [&](std::size_t index) {
         output[index] = std::max(input[index], 0.0f);
     });
     return output;
 }
 
-std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>& input) {
+std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
     const uint32_t channels = layer.input_shape.dims[0];
     const uint32_t in_h = layer.input_shape.dims[1];
     const uint32_t in_w = layer.input_shape.dims[2];
@@ -94,7 +149,7 @@ std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>
     const std::size_t plane = static_cast<std::size_t>(out_h) * out_w;
     const std::size_t total = static_cast<std::size_t>(channels) * plane;
 
-    parallel::parallelFor(0, total, 64, [&](std::size_t index) {
+    runRange(0, total, 64, options.use_threads, [&](std::size_t index) {
         const uint32_t c = static_cast<uint32_t>(index / plane);
         const uint32_t rem = static_cast<uint32_t>(index % plane);
         const uint32_t oy = rem / out_w;
@@ -123,7 +178,13 @@ std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>
     return output;
 }
 
-std::vector<float> runLinear(const ModelDesc& model, const LayerDesc& layer, const std::vector<float>& input, std::string& error) {
+std::vector<float> runLinear(
+    const ModelDesc& model,
+    const LayerDesc& layer,
+    const std::vector<float>& input,
+    const CpuGraphOptions& options,
+    std::string& error
+) {
     const std::vector<float>* weights = requireWeight(model, layer.weights_index, error, "linear");
     if (!weights) {
         return {};
@@ -134,12 +195,12 @@ std::vector<float> runLinear(const ModelDesc& model, const LayerDesc& layer, con
     }
 
     std::vector<float> output(layer.out_features, 0.0f);
-    parallel::parallelFor(0, layer.out_features, 1, [&](std::size_t out_index) {
-        float sum = (*bias)[out_index];
+    runRange(0, layer.out_features, 1, options.use_threads, [&](std::size_t out_index) {
         const std::size_t weight_offset = out_index * layer.in_features;
-        for (uint32_t i = 0; i < layer.in_features; ++i) {
-            sum += input[i] * (*weights)[weight_offset + i];
-        }
+        const float dot = options.use_simd
+            ? dotProductSimd(input.data(), weights->data() + weight_offset, layer.in_features)
+            : dotProductScalar(input.data(), weights->data() + weight_offset, layer.in_features);
+        const float sum = (*bias)[out_index] + dot;
         output[out_index] = sum;
     });
     return output;
@@ -182,7 +243,7 @@ bool CpuGraphExecutor::ready() const {
     return model_ != nullptr && error_.empty();
 }
 
-std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input) const {
+std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuGraphOptions options) const {
     if (!ready()) {
         return {};
     }
@@ -196,18 +257,18 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input) cons
     for (const LayerDesc& layer : model_->layers) {
         switch (layer.type) {
             case LayerType::Conv2D:
-                current = runConv2d(*model_, layer, current, error);
+                current = runConv2d(*model_, layer, current, options, error);
                 break;
             case LayerType::Relu:
-                current = runRelu(layer, current);
+                current = runRelu(layer, current, options);
                 break;
             case LayerType::MaxPool2D:
-                current = runMaxPool2d(layer, current);
+                current = runMaxPool2d(layer, current, options);
                 break;
             case LayerType::Flatten:
                 break;
             case LayerType::Linear:
-                current = runLinear(*model_, layer, current, error);
+                current = runLinear(*model_, layer, current, options, error);
                 break;
             case LayerType::Unknown:
                 return {};
@@ -221,20 +282,20 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input) cons
     return current;
 }
 
-std::vector<float> CpuGraphExecutor::inferBytes(const std::vector<uint8_t>& input) const {
+std::vector<float> CpuGraphExecutor::inferBytes(const std::vector<uint8_t>& input, CpuGraphOptions options) const {
     std::vector<float> float_input(input.size());
     for (std::size_t i = 0; i < input.size(); ++i) {
         float_input[i] = static_cast<float>(input[i]) / 255.0f;
     }
-    return infer(float_input);
+    return infer(float_input, options);
 }
 
-int CpuGraphExecutor::inferClass(const std::vector<float>& input) const {
-    return argmax(infer(input));
+int CpuGraphExecutor::inferClass(const std::vector<float>& input, CpuGraphOptions options) const {
+    return argmax(infer(input, options));
 }
 
-int CpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) const {
-    return argmax(inferBytes(input));
+int CpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input, CpuGraphOptions options) const {
+    return argmax(inferBytes(input, options));
 }
 
 const std::string& CpuGraphExecutor::error() const {
