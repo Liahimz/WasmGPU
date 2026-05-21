@@ -94,8 +94,8 @@ def parse_args():
     parser.add_argument(
         "--parallel-backend",
         choices=["wasm-thread", "pthread", "std-thread", "tbb", "serial"],
-        default=os.environ.get("WASM_GPU_PARALLEL_BACKEND", "wasm-thread"),
-        help="CPU parallel backend. Default: wasm-thread.",
+        default=os.environ.get("WASM_GPU_PARALLEL_BACKEND", "pthread"),
+        help="CPU parallel backend. Default: pthread.",
     )
     return parser.parse_args()
 
