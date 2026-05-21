@@ -3,6 +3,7 @@
 #include "cpu_graph_executor.h"
 
 #include <algorithm>
+#include <cstring>
 #include <iostream>
 #include <limits>
 
@@ -20,7 +21,30 @@ struct WebGpuGraphExecutor::Impl {
     bool inference_pending = false;
     int latest_prediction = -1;
 
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    WGPUDevice device = nullptr;
+    WGPUQueue queue = nullptr;
+
+    struct GpuTensor {
+        WGPUBuffer buffer = nullptr;
+        uint64_t size = 0;
+    };
+
+    struct GpuLayer {
+        LayerType type = LayerType::Unknown;
+        GeneratedWgsl shader;
+        WGPUBuffer weights = nullptr;
+        WGPUBuffer bias = nullptr;
+        WGPUBindGroupLayout bind_group_layout = nullptr;
+        WGPUPipelineLayout pipeline_layout = nullptr;
+        WGPUComputePipeline pipeline = nullptr;
+        WGPUBindGroup bind_group = nullptr;
+    };
+
+    std::vector<GpuTensor> tensors;
+    std::vector<GpuLayer> layers;
+    WGPUBuffer readback = nullptr;
+#elif defined(__EMSCRIPTEN__)
     WGpuDevice device = 0;
     WGpuQueue queue = 0;
 
@@ -48,11 +72,127 @@ struct WebGpuGraphExecutor::Impl {
 
 namespace {
 
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
+#if defined(__EMSCRIPTEN__)
 uint64_t byteSize(const TensorShape& shape) {
     return static_cast<uint64_t>(shape.elementCount() * sizeof(float));
 }
+#endif
 
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+WGPUStringView strView(const char* value) {
+    return WGPUStringView{value, WGPU_STRLEN};
+}
+
+WGPUBindGroupLayoutEntry storageLayoutEntry(uint32_t binding, WGPUBufferBindingType type, uint64_t min_size) {
+    WGPUBindGroupLayoutEntry entry = WGPU_BIND_GROUP_LAYOUT_ENTRY_INIT;
+    entry.binding = binding;
+    entry.visibility = WGPUShaderStage_Compute;
+    entry.buffer.type = type;
+    entry.buffer.minBindingSize = min_size;
+    return entry;
+}
+
+WGPUBindGroupEntry bufferEntry(uint32_t binding, WGPUBuffer buffer, uint64_t size) {
+    WGPUBindGroupEntry entry = WGPU_BIND_GROUP_ENTRY_INIT;
+    entry.binding = binding;
+    entry.buffer = buffer;
+    entry.offset = 0;
+    entry.size = size;
+    return entry;
+}
+
+WGPUBuffer createBuffer(WGPUDevice device, std::size_t size, WGPUBufferUsage usage) {
+    WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
+    desc.size = size;
+    desc.usage = usage;
+    return wgpuDeviceCreateBuffer(device, &desc);
+}
+
+WGPUShaderModule createShaderModule(WGPUDevice device, const char* code) {
+    WGPUShaderSourceWGSL source = WGPU_SHADER_SOURCE_WGSL_INIT;
+    source.code = strView(code);
+
+    WGPUShaderModuleDescriptor desc = WGPU_SHADER_MODULE_DESCRIPTOR_INIT;
+    desc.nextInChain = &source.chain;
+    return wgpuDeviceCreateShaderModule(device, &desc);
+}
+
+WGPUComputePipeline createComputePipeline(WGPUDevice device, WGPUShaderModule shader, WGPUPipelineLayout layout) {
+    WGPUComputePipelineDescriptor desc = WGPU_COMPUTE_PIPELINE_DESCRIPTOR_INIT;
+    desc.layout = layout;
+    desc.compute.module = shader;
+    desc.compute.entryPoint = strView("main");
+    return wgpuDeviceCreateComputePipeline(device, &desc);
+}
+
+void destroyLayerObjects(
+    WGPUBindGroup bind_group,
+    WGPUComputePipeline pipeline,
+    WGPUPipelineLayout pipeline_layout,
+    WGPUBindGroupLayout bind_group_layout,
+    WGPUBuffer bias,
+    WGPUBuffer weights
+) {
+    wgpuBindGroupRelease(bind_group);
+    wgpuComputePipelineRelease(pipeline);
+    wgpuPipelineLayoutRelease(pipeline_layout);
+    wgpuBindGroupLayoutRelease(bind_group_layout);
+    wgpuBufferRelease(bias);
+    wgpuBufferRelease(weights);
+}
+
+int readPredictionFromMappedBuffer(WGPUBuffer buffer, uint64_t size) {
+    std::vector<float> output(size / sizeof(float));
+    const void* mapped = wgpuBufferGetConstMappedRange(buffer, 0, size);
+    if (mapped) {
+        std::memcpy(output.data(), mapped, size);
+    }
+    wgpuBufferUnmap(buffer);
+    return argmax(output);
+}
+
+void encodeGraphDispatch(WebGpuGraphExecutor::Impl& impl, WGPUCommandEncoder encoder) {
+    for (const auto& layer : impl.layers) {
+        WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
+        wgpuComputePassEncoderSetPipeline(pass, layer.pipeline);
+        wgpuComputePassEncoderSetBindGroup(pass, 0, layer.bind_group, 0, nullptr);
+        wgpuComputePassEncoderDispatchWorkgroups(pass, layer.shader.dispatch_x, layer.shader.dispatch_y, layer.shader.dispatch_z);
+        wgpuComputePassEncoderEnd(pass);
+        wgpuComputePassEncoderRelease(pass);
+    }
+    wgpuCommandEncoderCopyBufferToBuffer(
+        encoder,
+        impl.tensors.back().buffer,
+        0,
+        impl.readback,
+        0,
+        impl.tensors.back().size
+    );
+}
+
+bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<uint8_t>& input) {
+    if (!impl.model || input.size() != impl.model->input_shape.elementCount()) {
+        impl.error = "Input size does not match model input shape";
+        return false;
+    }
+
+    std::vector<float> float_input(input.size());
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        float_input[i] = static_cast<float>(input[i]) / 255.0f;
+    }
+    wgpuQueueWriteBuffer(impl.queue, impl.tensors.front().buffer, 0, float_input.data(), float_input.size() * sizeof(float));
+    return true;
+}
+
+void onGraphReadbackMapped(WGPUMapAsyncStatus, WGPUStringView, void* userdata1, void*) {
+    auto* impl = static_cast<WebGpuGraphExecutor::Impl*>(userdata1);
+    if (!impl) {
+        return;
+    }
+    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->tensors.back().size);
+    impl->inference_pending = false;
+}
+#elif defined(__EMSCRIPTEN__)
 WGpuBindGroupLayoutEntry storageLayoutEntry(uint32_t binding, WGPU_BUFFER_BINDING_TYPE type, uint64_t min_size) {
     WGpuBindGroupLayoutEntry entry = WGPU_BUFFER_BINDING_LAYOUT_ENTRY_DEFAULT_INITIALIZER;
     entry.binding = binding;
@@ -157,7 +297,25 @@ WebGpuGraphExecutor::~WebGpuGraphExecutor() {
 }
 
 void WebGpuGraphExecutor::reset() {
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    for (auto& layer : impl_->layers) {
+        destroyLayerObjects(
+            layer.bind_group,
+            layer.pipeline,
+            layer.pipeline_layout,
+            layer.bind_group_layout,
+            layer.bias,
+            layer.weights
+        );
+    }
+    for (auto& tensor : impl_->tensors) {
+        wgpuBufferRelease(tensor.buffer);
+    }
+    wgpuBufferRelease(impl_->readback);
+    impl_->layers.clear();
+    impl_->tensors.clear();
+    impl_->readback = nullptr;
+#elif defined(__EMSCRIPTEN__)
     for (auto& layer : impl_->layers) {
         destroyLayerObjects(
             layer.bind_group,
@@ -207,9 +365,10 @@ bool WebGpuGraphExecutor::configure(const ModelDesc& model) {
 }
 
 #if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
-bool WebGpuGraphExecutor::attach(WGPUDevice, WGPUQueue) {
-    impl_->error = "WebGpuGraphExecutor is not implemented for emdawnwebgpu yet";
-    return false;
+bool WebGpuGraphExecutor::attach(WGPUDevice device, WGPUQueue queue) {
+    impl_->device = device;
+    impl_->queue = queue;
+    return device && queue;
 }
 #elif defined(__EMSCRIPTEN__)
 bool WebGpuGraphExecutor::attach(WGpuDevice device, WGpuQueue queue) {
@@ -229,7 +388,126 @@ bool WebGpuGraphExecutor::ready() const {
 }
 
 bool WebGpuGraphExecutor::prepare() {
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    if (impl_->resources_ready) {
+        return true;
+    }
+    if (!impl_->model || !impl_->device || !impl_->queue) {
+        impl_->error = "Dawn WebGPU graph executor is missing model or device";
+        return false;
+    }
+
+    impl_->tensors.clear();
+    impl_->layers.clear();
+
+    const ModelDesc& model = *impl_->model;
+    impl_->tensors.push_back({
+        createBuffer(impl_->device, byteSize(model.input_shape), WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst),
+        byteSize(model.input_shape),
+    });
+
+    uint32_t input_tensor_index = 0;
+    for (std::size_t i = 0; i < model.layers.size(); ++i) {
+        const LayerDesc& layer = model.layers[i];
+        if (layer.type == LayerType::Flatten) {
+            continue;
+        }
+
+        const uint64_t output_size = byteSize(layer.output_shape);
+        const bool final_layer = i + 1 == model.layers.size();
+        impl_->tensors.push_back({
+            createBuffer(
+                impl_->device,
+                output_size,
+                final_layer ? (WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc) : WGPUBufferUsage_Storage
+            ),
+            output_size,
+        });
+        const uint32_t output_tensor_index = static_cast<uint32_t>(impl_->tensors.size() - 1);
+
+        Impl::GpuLayer gpu_layer;
+        gpu_layer.type = layer.type;
+        gpu_layer.shader = impl_->shaders[i];
+
+        std::vector<WGPUBindGroupLayoutEntry> layout_entries;
+        std::vector<WGPUBindGroupEntry> bind_entries;
+        layout_entries.push_back(storageLayoutEntry(0, WGPUBufferBindingType_ReadOnlyStorage, impl_->tensors[input_tensor_index].size));
+        bind_entries.push_back(bufferEntry(0, impl_->tensors[input_tensor_index].buffer, impl_->tensors[input_tensor_index].size));
+
+        if (layer.type == LayerType::Conv2D || layer.type == LayerType::Linear) {
+            const ModelWeight* weights = model.weight(layer.weights_index);
+            const ModelWeight* bias = model.weight(layer.bias_index);
+            if (!weights || !bias) {
+                impl_->error = layer.name + ": missing weights or bias";
+                return false;
+            }
+
+            const uint64_t weights_size = static_cast<uint64_t>(weights->values.size() * sizeof(float));
+            const uint64_t bias_size = static_cast<uint64_t>(bias->values.size() * sizeof(float));
+            gpu_layer.weights = createBuffer(impl_->device, weights_size, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+            gpu_layer.bias = createBuffer(impl_->device, bias_size, WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst);
+            wgpuQueueWriteBuffer(impl_->queue, gpu_layer.weights, 0, weights->values.data(), weights_size);
+            wgpuQueueWriteBuffer(impl_->queue, gpu_layer.bias, 0, bias->values.data(), bias_size);
+
+            layout_entries.push_back(storageLayoutEntry(1, WGPUBufferBindingType_ReadOnlyStorage, weights_size));
+            layout_entries.push_back(storageLayoutEntry(2, WGPUBufferBindingType_ReadOnlyStorage, bias_size));
+            layout_entries.push_back(storageLayoutEntry(3, WGPUBufferBindingType_Storage, output_size));
+            bind_entries.push_back(bufferEntry(1, gpu_layer.weights, weights_size));
+            bind_entries.push_back(bufferEntry(2, gpu_layer.bias, bias_size));
+            bind_entries.push_back(bufferEntry(3, impl_->tensors[output_tensor_index].buffer, output_size));
+        } else {
+            layout_entries.push_back(storageLayoutEntry(1, WGPUBufferBindingType_Storage, output_size));
+            bind_entries.push_back(bufferEntry(1, impl_->tensors[output_tensor_index].buffer, output_size));
+        }
+
+        WGPUBindGroupLayoutDescriptor bgl_desc = WGPU_BIND_GROUP_LAYOUT_DESCRIPTOR_INIT;
+        bgl_desc.entryCount = layout_entries.size();
+        bgl_desc.entries = layout_entries.data();
+        gpu_layer.bind_group_layout = wgpuDeviceCreateBindGroupLayout(impl_->device, &bgl_desc);
+
+        WGPUBindGroupLayout layouts[1] = {gpu_layer.bind_group_layout};
+        WGPUPipelineLayoutDescriptor pipeline_layout_desc = WGPU_PIPELINE_LAYOUT_DESCRIPTOR_INIT;
+        pipeline_layout_desc.bindGroupLayoutCount = 1;
+        pipeline_layout_desc.bindGroupLayouts = layouts;
+        gpu_layer.pipeline_layout = wgpuDeviceCreatePipelineLayout(impl_->device, &pipeline_layout_desc);
+
+        WGPUShaderModule shader_module = createShaderModule(impl_->device, gpu_layer.shader.source.c_str());
+        gpu_layer.pipeline = createComputePipeline(impl_->device, shader_module, gpu_layer.pipeline_layout);
+        wgpuShaderModuleRelease(shader_module);
+
+        WGPUBindGroupDescriptor bg_desc = WGPU_BIND_GROUP_DESCRIPTOR_INIT;
+        bg_desc.layout = gpu_layer.bind_group_layout;
+        bg_desc.entryCount = bind_entries.size();
+        bg_desc.entries = bind_entries.data();
+        gpu_layer.bind_group = wgpuDeviceCreateBindGroup(impl_->device, &bg_desc);
+
+        if (!gpu_layer.pipeline || !gpu_layer.bind_group) {
+            impl_->error = layer.name + ": failed to create Dawn WebGPU pipeline or bind group";
+            destroyLayerObjects(
+                gpu_layer.bind_group,
+                gpu_layer.pipeline,
+                gpu_layer.pipeline_layout,
+                gpu_layer.bind_group_layout,
+                gpu_layer.bias,
+                gpu_layer.weights
+            );
+            return false;
+        }
+
+        impl_->layers.emplace_back(gpu_layer);
+        input_tensor_index = output_tensor_index;
+    }
+
+    if (impl_->tensors.empty()) {
+        impl_->error = "Dawn WebGPU graph has no tensors";
+        return false;
+    }
+
+    const uint64_t output_size = impl_->tensors.back().size;
+    impl_->readback = createBuffer(impl_->device, output_size, WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead);
+    impl_->resources_ready = true;
+    return true;
+#elif defined(__EMSCRIPTEN__)
     if (impl_->resources_ready) {
         return true;
     }
@@ -363,7 +641,11 @@ bool WebGpuGraphExecutor::prepare() {
 }
 
 int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    (void)input;
+    impl_->error = "Synchronous Dawn graph inference is not supported";
+    return -1;
+#elif defined(__EMSCRIPTEN__)
     if (!ready() && !prepare()) {
         return -1;
     }
@@ -387,7 +669,30 @@ int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
 }
 
 int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input) {
-#if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU) && defined(BUILD_WASM_WEBGPU_ASYNC)
+#if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
+    if (!ready() && !prepare()) {
+        return -1;
+    }
+    if (impl_->inference_pending || !uploadInput(*impl_, input)) {
+        return -1;
+    }
+
+    WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(impl_->device, nullptr);
+    encodeGraphDispatch(*impl_, encoder);
+
+    WGPUCommandBuffer command_buffer = wgpuCommandEncoderFinish(encoder, nullptr);
+    wgpuCommandEncoderRelease(encoder);
+    wgpuQueueSubmit(impl_->queue, 1, &command_buffer);
+    wgpuCommandBufferRelease(command_buffer);
+
+    impl_->inference_pending = true;
+    WGPUBufferMapCallbackInfo callback = WGPU_BUFFER_MAP_CALLBACK_INFO_INIT;
+    callback.mode = WGPUCallbackMode_AllowSpontaneous;
+    callback.callback = &onGraphReadbackMapped;
+    callback.userdata1 = impl_;
+    wgpuBufferMapAsync(impl_->readback, WGPUMapMode_Read, 0, impl_->tensors.back().size, callback);
+    return -1;
+#elif defined(__EMSCRIPTEN__) && defined(BUILD_WASM_WEBGPU_ASYNC)
     if (!ready() && !prepare()) {
         return -1;
     }

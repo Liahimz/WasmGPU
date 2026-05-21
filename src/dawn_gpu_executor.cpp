@@ -121,6 +121,7 @@ void readMappedArray(WGPUBuffer buffer, std::array<T, Count>& out) {
 GpuExecutor::GpuExecutor() = default;
 
 GpuExecutor::~GpuExecutor() {
+    graph_.reset();
     wgpuBufferRelease(readback_buffer_);
     wgpuBufferRelease(timestamp_readback_buffer_);
     wgpuBufferRelease(timestamp_buffer_);
@@ -177,6 +178,9 @@ void GpuExecutor::configure(const network::TinyLenetWeights* weights) {
 void GpuExecutor::configure(const network::ModelDesc* model, const network::TinyLenetWeights* weights) {
     model_ = model;
     weights_ = weights;
+    if (model_ && !graph_.configure(*model_)) {
+        std::cerr << "Failed to configure Dawn WebGPU graph executor: " << graph_.error() << std::endl;
+    }
     requestWebGpuDevice();
 }
 
@@ -211,10 +215,16 @@ void GpuExecutor::prepareSyntheticLarge() {
 }
 
 bool GpuExecutor::inferencePending() const {
+    if (graph_.ready()) {
+        return graph_.inferencePending();
+    }
     return inference_pending_;
 }
 
 int GpuExecutor::latestPrediction() const {
+    if (graph_.ready()) {
+        return graph_.latestPrediction();
+    }
     return latest_prediction_;
 }
 
@@ -346,6 +356,17 @@ void GpuExecutor::createNetworkResources() {
     if (network_ready_) {
         return;
     }
+    if (model_ && model_->valid() && device_ && queue_) {
+        if (graph_.attach(device_, queue_) && graph_.prepare()) {
+            network_ready_ = true;
+            std::cout << "emdawnwebgpu graph resources ready for " << model_->name << std::endl;
+            return;
+        }
+        std::cerr << "Failed to create emdawnwebgpu graph resources: " << graph_.error()
+                  << "; falling back to fixed tiny_lenet resources"
+                  << std::endl;
+    }
+
     if (!weights_ || !weights_->valid() || !device_ || !queue_) {
         return;
     }
@@ -633,6 +654,19 @@ void GpuExecutor::createLargeNetworkResources() {
 }
 
 int GpuExecutor::infer(const std::vector<uint8_t>& image) {
+    if (graph_.ready()) {
+        const auto inference_start = Clock::now();
+        latest_backend_ = "graph";
+        const int prediction = graph_.inferClassBytesAsync(image);
+        const auto inference_end = Clock::now();
+        inference_pending_ = graph_.inferencePending();
+        std::cout << "[timing] dawn_gpu_graph_async_start"
+                  << " submit=" << elapsedMs(inference_start, inference_end)
+                  << "ms"
+                  << std::endl;
+        return prediction;
+    }
+
     if (!ready() || !weights_ || !weights_->valid() || image.size() != INPUT_VALUES) {
         latest_backend_ = "unavailable";
         return -1;
