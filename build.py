@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 import argparse
+import json
 
 # Settings
 BUILD_DIR = "build"
@@ -104,7 +105,7 @@ def parse_args():
 def main():
     args = parse_args()
     if args.parallel_backend is None:
-        args.parallel_backend = "serial" if args.mode == "resnet50" else "pthread"
+        args.parallel_backend = "pthread"
     sample_dir = BUILD_MODES[args.mode]
     print(f"Build mode: {args.mode}")
     print(f"Sample dir: {sample_dir}")
@@ -166,6 +167,16 @@ def main():
     SHADERS_DIR = "shaders"
     if args.mode == "js-webgpu" and os.path.exists(SHADERS_DIR):
         shutil.copytree(SHADERS_DIR, os.path.join(BUILD_DIR, SHADERS_DIR))
+
+    with open(os.path.join(BUILD_DIR, "build_config.json"), "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "mode": args.mode,
+                "parallelBackend": args.parallel_backend,
+            },
+            f,
+            indent=2,
+        )
 
     print("\n✅ Build complete. To serve, run:")
     print(f"  cd {BUILD_DIR} && npx serve\n")
