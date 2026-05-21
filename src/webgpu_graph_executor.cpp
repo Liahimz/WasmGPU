@@ -7,6 +7,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <map>
 
 #if defined(__EMSCRIPTEN__) && !defined(BUILD_EMDAWN_WEBGPU)
 #include "lib_webgpu.h"
@@ -23,6 +24,9 @@ struct WebGpuGraphExecutor::Impl {
     int latest_prediction = -1;
     double pending_start_ms = 0.0;
     double pending_submit_ms = 0.0;
+    std::map<std::string, uint32_t> tensor_indices;
+    uint32_t output_tensor_index = 0;
+    uint64_t output_size = 0;
 
 #if defined(__EMSCRIPTEN__) && defined(BUILD_EMDAWN_WEBGPU)
     WGPUDevice device = nullptr;
@@ -171,11 +175,11 @@ void encodeGraphDispatch(WebGpuGraphExecutor::Impl& impl, WGPUCommandEncoder enc
     }
     wgpuCommandEncoderCopyBufferToBuffer(
         encoder,
-        impl.tensors.back().buffer,
+        impl.tensors[impl.output_tensor_index].buffer,
         0,
         impl.readback,
         0,
-        impl.tensors.back().size
+        impl.output_size
     );
 }
 
@@ -189,7 +193,12 @@ bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<uint8_t>& in
     for (std::size_t i = 0; i < input.size(); ++i) {
         float_input[i] = static_cast<float>(input[i]) / 255.0f;
     }
-    wgpuQueueWriteBuffer(impl.queue, impl.tensors.front().buffer, 0, float_input.data(), float_input.size() * sizeof(float));
+    auto input_it = impl.tensor_indices.find(impl.model->input_name);
+    if (input_it == impl.tensor_indices.end()) {
+        impl.error = "Input tensor is not prepared";
+        return false;
+    }
+    wgpuQueueWriteBuffer(impl.queue, impl.tensors[input_it->second].buffer, 0, float_input.data(), float_input.size() * sizeof(float));
     return true;
 }
 
@@ -198,7 +207,7 @@ void onGraphReadbackMapped(WGPUMapAsyncStatus, WGPUStringView, void* userdata1, 
     if (!impl) {
         return;
     }
-    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->tensors.back().size);
+    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size);
     const double total_ms = nowMs() - impl->pending_start_ms;
     std::cout << "[timing] dawn_gpu_graph_detail"
               << " submit=" << impl->pending_submit_ms
@@ -267,11 +276,11 @@ void encodeGraphDispatch(WebGpuGraphExecutor::Impl& impl, WGpuCommandEncoder enc
     }
     wgpu_command_encoder_copy_buffer_to_buffer(
         encoder,
-        impl.tensors.back().buffer,
+        impl.tensors[impl.output_tensor_index].buffer,
         0,
         impl.readback,
         0,
-        impl.tensors.back().size
+        impl.output_size
     );
 }
 
@@ -285,7 +294,12 @@ bool uploadInput(WebGpuGraphExecutor::Impl& impl, const std::vector<uint8_t>& in
     for (std::size_t i = 0; i < input.size(); ++i) {
         float_input[i] = static_cast<float>(input[i]) / 255.0f;
     }
-    wgpu_queue_write_buffer(impl.queue, impl.tensors.front().buffer, 0, float_input.data(), float_input.size() * sizeof(float));
+    auto input_it = impl.tensor_indices.find(impl.model->input_name);
+    if (input_it == impl.tensor_indices.end()) {
+        impl.error = "Input tensor is not prepared";
+        return false;
+    }
+    wgpu_queue_write_buffer(impl.queue, impl.tensors[input_it->second].buffer, 0, float_input.data(), float_input.size() * sizeof(float));
     return true;
 }
 
@@ -295,7 +309,7 @@ void onGraphReadbackMapped(WGpuBuffer, void* user_data, WGPU_MAP_MODE_FLAGS, dou
     if (!impl) {
         return;
     }
-    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->tensors.back().size);
+    impl->latest_prediction = readPredictionFromMappedBuffer(impl->readback, impl->output_size);
     const double total_ms = nowMs() - impl->pending_start_ms;
     std::cout << "[timing] gpu_graph_detail"
               << " submit=" << impl->pending_submit_ms
@@ -335,6 +349,9 @@ void WebGpuGraphExecutor::reset() {
     wgpuBufferRelease(impl_->readback);
     impl_->layers.clear();
     impl_->tensors.clear();
+    impl_->tensor_indices.clear();
+    impl_->output_tensor_index = 0;
+    impl_->output_size = 0;
     impl_->readback = nullptr;
 #elif defined(__EMSCRIPTEN__)
     for (auto& layer : impl_->layers) {
@@ -353,6 +370,9 @@ void WebGpuGraphExecutor::reset() {
     wgpu_object_destroy(impl_->readback);
     impl_->layers.clear();
     impl_->tensors.clear();
+    impl_->tensor_indices.clear();
+    impl_->output_tensor_index = 0;
+    impl_->output_size = 0;
     impl_->readback = 0;
 #endif
     impl_->resources_ready = false;
@@ -420,27 +440,41 @@ bool WebGpuGraphExecutor::prepare() {
 
     impl_->tensors.clear();
     impl_->layers.clear();
+    impl_->tensor_indices.clear();
 
     const ModelDesc& model = *impl_->model;
     impl_->tensors.push_back({
         createBuffer(impl_->device, byteSize(model.input_shape), WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst),
         byteSize(model.input_shape),
     });
+    impl_->tensor_indices[model.input_name] = 0;
 
-    uint32_t input_tensor_index = 0;
     for (std::size_t i = 0; i < model.layers.size(); ++i) {
         const LayerDesc& layer = model.layers[i];
         if (layer.type == LayerType::Flatten) {
+            if (layer.input_names.empty() || layer.output_names.empty()) {
+                impl_->error = layer.name + ": missing tensor names";
+                return false;
+            }
+            auto input_it = impl_->tensor_indices.find(layer.input_names[0]);
+            if (input_it == impl_->tensor_indices.end()) {
+                impl_->error = layer.name + ": missing input tensor '" + layer.input_names[0] + "'";
+                return false;
+            }
+            impl_->tensor_indices[layer.output_names[0]] = input_it->second;
             continue;
+        }
+        if (layer.input_names.empty() || layer.output_names.empty()) {
+            impl_->error = layer.name + ": missing tensor names";
+            return false;
         }
 
         const uint64_t output_size = byteSize(layer.output_shape);
-        const bool final_layer = i + 1 == model.layers.size();
         impl_->tensors.push_back({
             createBuffer(
                 impl_->device,
                 output_size,
-                final_layer ? (WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc) : WGPUBufferUsage_Storage
+                WGPUBufferUsage_Storage | WGPUBufferUsage_CopySrc
             ),
             output_size,
         });
@@ -452,6 +486,12 @@ bool WebGpuGraphExecutor::prepare() {
 
         std::vector<WGPUBindGroupLayoutEntry> layout_entries;
         std::vector<WGPUBindGroupEntry> bind_entries;
+        auto first_input_it = impl_->tensor_indices.find(layer.input_names[0]);
+        if (first_input_it == impl_->tensor_indices.end()) {
+            impl_->error = layer.name + ": missing input tensor '" + layer.input_names[0] + "'";
+            return false;
+        }
+        const uint32_t input_tensor_index = first_input_it->second;
         layout_entries.push_back(storageLayoutEntry(0, WGPUBufferBindingType_ReadOnlyStorage, impl_->tensors[input_tensor_index].size));
         bind_entries.push_back(bufferEntry(0, impl_->tensors[input_tensor_index].buffer, impl_->tensors[input_tensor_index].size));
 
@@ -476,6 +516,21 @@ bool WebGpuGraphExecutor::prepare() {
             bind_entries.push_back(bufferEntry(1, gpu_layer.weights, weights_size));
             bind_entries.push_back(bufferEntry(2, gpu_layer.bias, bias_size));
             bind_entries.push_back(bufferEntry(3, impl_->tensors[output_tensor_index].buffer, output_size));
+        } else if (layer.type == LayerType::Add) {
+            if (layer.input_names.size() != 2) {
+                impl_->error = layer.name + ": add expects two inputs";
+                return false;
+            }
+            auto second_input_it = impl_->tensor_indices.find(layer.input_names[1]);
+            if (second_input_it == impl_->tensor_indices.end()) {
+                impl_->error = layer.name + ": missing input tensor '" + layer.input_names[1] + "'";
+                return false;
+            }
+            const uint32_t right_tensor_index = second_input_it->second;
+            layout_entries.push_back(storageLayoutEntry(1, WGPUBufferBindingType_ReadOnlyStorage, impl_->tensors[right_tensor_index].size));
+            layout_entries.push_back(storageLayoutEntry(2, WGPUBufferBindingType_Storage, output_size));
+            bind_entries.push_back(bufferEntry(1, impl_->tensors[right_tensor_index].buffer, impl_->tensors[right_tensor_index].size));
+            bind_entries.push_back(bufferEntry(2, impl_->tensors[output_tensor_index].buffer, output_size));
         } else {
             layout_entries.push_back(storageLayoutEntry(1, WGPUBufferBindingType_Storage, output_size));
             bind_entries.push_back(bufferEntry(1, impl_->tensors[output_tensor_index].buffer, output_size));
@@ -515,17 +570,19 @@ bool WebGpuGraphExecutor::prepare() {
             return false;
         }
 
+        impl_->tensor_indices[layer.output_names[0]] = output_tensor_index;
         impl_->layers.emplace_back(gpu_layer);
-        input_tensor_index = output_tensor_index;
     }
 
-    if (impl_->tensors.empty()) {
-        impl_->error = "Dawn WebGPU graph has no tensors";
+    auto output_it = impl_->tensor_indices.find(model.output_name);
+    if (output_it == impl_->tensor_indices.end()) {
+        impl_->error = "Dawn WebGPU graph is missing output tensor '" + model.output_name + "'";
         return false;
     }
 
-    const uint64_t output_size = impl_->tensors.back().size;
-    impl_->readback = createBuffer(impl_->device, output_size, WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead);
+    impl_->output_tensor_index = output_it->second;
+    impl_->output_size = impl_->tensors[impl_->output_tensor_index].size;
+    impl_->readback = createBuffer(impl_->device, impl_->output_size, WGPUBufferUsage_CopyDst | WGPUBufferUsage_MapRead);
     impl_->resources_ready = true;
     return true;
 #elif defined(__EMSCRIPTEN__)
@@ -539,27 +596,41 @@ bool WebGpuGraphExecutor::prepare() {
 
     impl_->tensors.clear();
     impl_->layers.clear();
+    impl_->tensor_indices.clear();
 
     const ModelDesc& model = *impl_->model;
     impl_->tensors.push_back({
         createBuffer(impl_->device, byteSize(model.input_shape), WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_DST),
         byteSize(model.input_shape),
     });
+    impl_->tensor_indices[model.input_name] = 0;
 
-    uint32_t input_tensor_index = 0;
     for (std::size_t i = 0; i < model.layers.size(); ++i) {
         const LayerDesc& layer = model.layers[i];
         if (layer.type == LayerType::Flatten) {
+            if (layer.input_names.empty() || layer.output_names.empty()) {
+                impl_->error = layer.name + ": missing tensor names";
+                return false;
+            }
+            auto input_it = impl_->tensor_indices.find(layer.input_names[0]);
+            if (input_it == impl_->tensor_indices.end()) {
+                impl_->error = layer.name + ": missing input tensor '" + layer.input_names[0] + "'";
+                return false;
+            }
+            impl_->tensor_indices[layer.output_names[0]] = input_it->second;
             continue;
+        }
+        if (layer.input_names.empty() || layer.output_names.empty()) {
+            impl_->error = layer.name + ": missing tensor names";
+            return false;
         }
 
         const uint64_t output_size = byteSize(layer.output_shape);
-        const bool final_layer = i + 1 == model.layers.size();
         impl_->tensors.push_back({
             createBuffer(
                 impl_->device,
                 output_size,
-                final_layer ? (WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC) : WGPU_BUFFER_USAGE_STORAGE
+                WGPU_BUFFER_USAGE_STORAGE | WGPU_BUFFER_USAGE_COPY_SRC
             ),
             output_size,
         });
@@ -571,6 +642,12 @@ bool WebGpuGraphExecutor::prepare() {
 
         std::vector<WGpuBindGroupLayoutEntry> layout_entries;
         std::vector<WGpuBindGroupEntry> bind_entries;
+        auto first_input_it = impl_->tensor_indices.find(layer.input_names[0]);
+        if (first_input_it == impl_->tensor_indices.end()) {
+            impl_->error = layer.name + ": missing input tensor '" + layer.input_names[0] + "'";
+            return false;
+        }
+        const uint32_t input_tensor_index = first_input_it->second;
         layout_entries.push_back(storageLayoutEntry(0, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, impl_->tensors[input_tensor_index].size));
         bind_entries.push_back(bufferEntry(0, impl_->tensors[input_tensor_index].buffer, impl_->tensors[input_tensor_index].size));
 
@@ -595,6 +672,21 @@ bool WebGpuGraphExecutor::prepare() {
             bind_entries.push_back(bufferEntry(1, gpu_layer.weights, weights_size));
             bind_entries.push_back(bufferEntry(2, gpu_layer.bias, bias_size));
             bind_entries.push_back(bufferEntry(3, impl_->tensors[output_tensor_index].buffer, output_size));
+        } else if (layer.type == LayerType::Add) {
+            if (layer.input_names.size() != 2) {
+                impl_->error = layer.name + ": add expects two inputs";
+                return false;
+            }
+            auto second_input_it = impl_->tensor_indices.find(layer.input_names[1]);
+            if (second_input_it == impl_->tensor_indices.end()) {
+                impl_->error = layer.name + ": missing input tensor '" + layer.input_names[1] + "'";
+                return false;
+            }
+            const uint32_t right_tensor_index = second_input_it->second;
+            layout_entries.push_back(storageLayoutEntry(1, WGPU_BUFFER_BINDING_TYPE_READ_ONLY_STORAGE, impl_->tensors[right_tensor_index].size));
+            layout_entries.push_back(storageLayoutEntry(2, WGPU_BUFFER_BINDING_TYPE_STORAGE, output_size));
+            bind_entries.push_back(bufferEntry(1, impl_->tensors[right_tensor_index].buffer, impl_->tensors[right_tensor_index].size));
+            bind_entries.push_back(bufferEntry(2, impl_->tensors[output_tensor_index].buffer, output_size));
         } else {
             layout_entries.push_back(storageLayoutEntry(1, WGPU_BUFFER_BINDING_TYPE_STORAGE, output_size));
             bind_entries.push_back(bufferEntry(1, impl_->tensors[output_tensor_index].buffer, output_size));
@@ -640,17 +732,19 @@ bool WebGpuGraphExecutor::prepare() {
             return false;
         }
 
+        impl_->tensor_indices[layer.output_names[0]] = output_tensor_index;
         impl_->layers.emplace_back(gpu_layer);
-        input_tensor_index = output_tensor_index;
     }
 
-    if (impl_->tensors.empty()) {
-        impl_->error = "WebGPU graph has no tensors";
+    auto output_it = impl_->tensor_indices.find(model.output_name);
+    if (output_it == impl_->tensor_indices.end()) {
+        impl_->error = "WebGPU graph is missing output tensor '" + model.output_name + "'";
         return false;
     }
 
-    const uint64_t output_size = impl_->tensors.back().size;
-    impl_->readback = createBuffer(impl_->device, output_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
+    impl_->output_tensor_index = output_it->second;
+    impl_->output_size = impl_->tensors[impl_->output_tensor_index].size;
+    impl_->readback = createBuffer(impl_->device, impl_->output_size, WGPU_BUFFER_USAGE_COPY_DST | WGPU_BUFFER_USAGE_MAP_READ);
     impl_->resources_ready = true;
     return true;
 #else
@@ -681,8 +775,8 @@ int WebGpuGraphExecutor::inferClassBytes(const std::vector<uint8_t>& input) {
     WGpuCommandBuffer command_buffer = wgpu_command_encoder_finish(encoder);
     wgpu_queue_submit_one_and_destroy(impl_->queue, command_buffer);
 
-    wgpu_buffer_map_sync(impl_->readback, WGPU_MAP_MODE_READ, 0, impl_->tensors.back().size);
-    impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->tensors.back().size);
+    wgpu_buffer_map_sync(impl_->readback, WGPU_MAP_MODE_READ, 0, impl_->output_size);
+    impl_->latest_prediction = readPredictionFromMappedBuffer(impl_->readback, impl_->output_size);
     std::cout << "[timing] gpu_graph_detail"
               << " total_inference=" << (nowMs() - start_ms)
               << "ms prediction=" << impl_->latest_prediction
@@ -718,7 +812,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
     callback.mode = WGPUCallbackMode_AllowSpontaneous;
     callback.callback = &onGraphReadbackMapped;
     callback.userdata1 = impl_;
-    wgpuBufferMapAsync(impl_->readback, WGPUMapMode_Read, 0, impl_->tensors.back().size, callback);
+    wgpuBufferMapAsync(impl_->readback, WGPUMapMode_Read, 0, impl_->output_size, callback);
     return -1;
 #elif defined(__EMSCRIPTEN__) && defined(BUILD_WASM_WEBGPU_ASYNC)
     if (!ready() && !prepare()) {
@@ -743,7 +837,7 @@ int WebGpuGraphExecutor::inferClassBytesAsync(const std::vector<uint8_t>& input)
         impl_,
         WGPU_MAP_MODE_READ,
         0,
-        impl_->tensors.back().size
+        impl_->output_size
     );
     return -1;
 #else

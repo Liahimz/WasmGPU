@@ -20,6 +20,8 @@ enum class LayerType {
     MaxPool2D,
     Relu,
     Flatten,
+    Add,
+    GlobalAvgPool2D,
     Unknown,
 };
 
@@ -32,9 +34,16 @@ struct ModelWeight {
     std::vector<float> values;
 };
 
+struct TensorDesc {
+    std::string name;
+    TensorShape shape;
+};
+
 struct LayerDesc {
     std::string name;
     LayerType type = LayerType::Unknown;
+    std::vector<std::string> input_names;
+    std::vector<std::string> output_names;
 
     TensorShape input_shape;
     TensorShape output_shape;
@@ -60,12 +69,16 @@ struct ModelDesc {
     std::string dtype;
     std::string endianness;
     TensorShape input_shape;
+    std::string input_name;
+    std::string output_name;
+    std::vector<TensorDesc> tensors;
     std::vector<LayerDesc> layers;
     std::vector<ModelWeight> weights;
     std::string error;
 
     bool valid() const;
     const ModelWeight* weight(int index) const;
+    const TensorDesc* tensor(const std::string& name) const;
 };
 
 ModelDesc loadModelFromEmbedded(const std::string& manifest_name);

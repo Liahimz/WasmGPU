@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 
 #if defined(__wasm_simd128__)
 #include <wasm_simd128.h>
@@ -178,6 +179,45 @@ std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>
     return output;
 }
 
+std::vector<float> runAdd(
+    const LayerDesc& layer,
+    const std::vector<float>& left,
+    const std::vector<float>& right,
+    const CpuGraphOptions& options
+) {
+    const std::size_t count = layer.output_shape.elementCount();
+    if (left.size() != count || right.size() != count) {
+        return {};
+    }
+
+    std::vector<float> output(count, 0.0f);
+    runRange(0, count, 256, options.use_threads, [&](std::size_t index) {
+        output[index] = left[index] + right[index];
+    });
+    return output;
+}
+
+std::vector<float> runGlobalAvgPool2d(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
+    const uint32_t channels = layer.input_shape.dims[0];
+    const uint32_t height = layer.input_shape.dims[1];
+    const uint32_t width = layer.input_shape.dims[2];
+    const std::size_t plane = static_cast<std::size_t>(height) * width;
+    if (input.size() != static_cast<std::size_t>(channels) * plane) {
+        return {};
+    }
+
+    std::vector<float> output(channels, 0.0f);
+    runRange(0, channels, 1, options.use_threads, [&](std::size_t channel) {
+        const std::size_t base = channel * plane;
+        float sum = 0.0f;
+        for (std::size_t i = 0; i < plane; ++i) {
+            sum += input[base + i];
+        }
+        output[channel] = sum / static_cast<float>(plane);
+    });
+    return output;
+}
+
 std::vector<float> runLinear(
     const ModelDesc& model,
     const LayerDesc& layer,
@@ -251,35 +291,64 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
         return {};
     }
 
-    std::vector<float> current = input;
+    std::map<std::string, std::vector<float>> tensors;
+    tensors[model_->input_name] = input;
     std::string error;
 
     for (const LayerDesc& layer : model_->layers) {
+        if (layer.input_names.empty() || layer.output_names.empty()) {
+            return {};
+        }
+
+        auto input_it = tensors.find(layer.input_names[0]);
+        if (input_it == tensors.end()) {
+            return {};
+        }
+
+        const std::vector<float>& first_input = input_it->second;
+        std::vector<float> output;
         switch (layer.type) {
             case LayerType::Conv2D:
-                current = runConv2d(*model_, layer, current, options, error);
+                output = runConv2d(*model_, layer, first_input, options, error);
                 break;
             case LayerType::Relu:
-                current = runRelu(layer, current, options);
+                output = runRelu(layer, first_input, options);
                 break;
             case LayerType::MaxPool2D:
-                current = runMaxPool2d(layer, current, options);
+                output = runMaxPool2d(layer, first_input, options);
                 break;
             case LayerType::Flatten:
+                output = first_input;
+                break;
+            case LayerType::Add: {
+                if (layer.input_names.size() != 2) {
+                    return {};
+                }
+                auto right_it = tensors.find(layer.input_names[1]);
+                if (right_it == tensors.end()) {
+                    return {};
+                }
+                output = runAdd(layer, first_input, right_it->second, options);
+                break;
+            }
+            case LayerType::GlobalAvgPool2D:
+                output = runGlobalAvgPool2d(layer, first_input, options);
                 break;
             case LayerType::Linear:
-                current = runLinear(*model_, layer, current, options, error);
+                output = runLinear(*model_, layer, first_input, options, error);
                 break;
             case LayerType::Unknown:
                 return {};
         }
 
-        if (!error.empty() || current.empty()) {
+        if (!error.empty() || output.empty()) {
             return {};
         }
+        tensors[layer.output_names[0]] = std::move(output);
     }
 
-    return current;
+    auto output_it = tensors.find(model_->output_name);
+    return output_it == tensors.end() ? std::vector<float>{} : output_it->second;
 }
 
 std::vector<float> CpuGraphExecutor::inferBytes(const std::vector<uint8_t>& input, CpuGraphOptions options) const {

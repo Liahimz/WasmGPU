@@ -291,6 +291,38 @@ bool readString(const JsonValue& object, const std::string& key, std::string& ou
     return true;
 }
 
+bool readStringArrayValue(const JsonValue& value, std::vector<std::string>& out, std::string& error) {
+    if (value.type != JsonValue::Type::Array) {
+        error = "Expected string array";
+        return false;
+    }
+    out.clear();
+    for (const JsonValue& item : value.array_value) {
+        if (item.type != JsonValue::Type::String) {
+            error = "String array contains a non-string value";
+            return false;
+        }
+        out.push_back(item.string_value);
+    }
+    return true;
+}
+
+bool readStringArray(const JsonValue& object, const std::string& key, std::vector<std::string>& out, std::string& error, bool required = false) {
+    const JsonValue* value = object.get(key);
+    if (!value) {
+        if (required) {
+            error = "Missing string array field: " + key;
+            return false;
+        }
+        return true;
+    }
+    if (!readStringArrayValue(*value, out, error)) {
+        error = key + ": " + error;
+        return false;
+    }
+    return true;
+}
+
 bool readUint(const JsonValue& object, const std::string& key, uint32_t& out, std::string& error, bool required = true) {
     const JsonValue* value = object.get(key);
     if (!value) {
@@ -388,7 +420,12 @@ uint32_t flattenedCount(const TensorShape& shape) {
     return count > std::numeric_limits<uint32_t>::max() ? 0 : static_cast<uint32_t>(count);
 }
 
-bool inferOutputShape(const TensorShape& current, LayerDesc& layer, std::string& error) {
+bool inferOutputShape(const std::vector<TensorShape>& inputs, LayerDesc& layer, std::string& error) {
+    if (inputs.empty()) {
+        error = "Layer has no input tensors";
+        return false;
+    }
+    const TensorShape& current = inputs[0];
     layer.input_shape = current;
     switch (layer.type) {
         case LayerType::Conv2D:
@@ -428,6 +465,24 @@ bool inferOutputShape(const TensorShape& current, LayerDesc& layer, std::string&
         case LayerType::Flatten:
             layer.output_shape.dims = {flattenedCount(current)};
             return true;
+        case LayerType::Add:
+            if (inputs.size() != 2) {
+                error = "add expects two input tensors";
+                return false;
+            }
+            if (inputs[0].dims != inputs[1].dims) {
+                error = "add input shapes must match";
+                return false;
+            }
+            layer.output_shape = current;
+            return true;
+        case LayerType::GlobalAvgPool2D:
+            if (current.dims.size() != 3) {
+                error = "global_avg_pool2d expects CHW input shape";
+                return false;
+            }
+            layer.output_shape.dims = {current.dims[0]};
+            return true;
         case LayerType::Linear:
             layer.in_features = layer.in_features == 0 ? flattenedCount(current) : layer.in_features;
             layer.output_shape.dims = {layer.out_features};
@@ -454,7 +509,24 @@ int appendWeight(ModelDesc& model, const std::string& file, const TensorShape& s
     return static_cast<int>(model.weights.size() - 1);
 }
 
-bool parseLayer(const JsonValue& json, ModelDesc& model, TensorShape& current_shape, std::size_t layer_index) {
+void upsertTensor(ModelDesc& model, std::map<std::string, TensorShape>& tensor_shapes, const std::string& name, const TensorShape& shape) {
+    tensor_shapes[name] = shape;
+    for (TensorDesc& tensor : model.tensors) {
+        if (tensor.name == name) {
+            tensor.shape = shape;
+            return;
+        }
+    }
+    model.tensors.push_back({name, shape});
+}
+
+bool parseLayer(
+    const JsonValue& json,
+    ModelDesc& model,
+    std::map<std::string, TensorShape>& tensor_shapes,
+    std::string& current_tensor,
+    std::size_t layer_index
+) {
     LayerDesc layer;
     std::string type_name;
     if (!readString(json, "type", type_name, model.error)) {
@@ -468,6 +540,52 @@ bool parseLayer(const JsonValue& json, ModelDesc& model, TensorShape& current_sh
     }
     if (layer.name.empty()) {
         layer.name = std::string(layerTypeName(layer.type)) + "_" + std::to_string(layer_index);
+    }
+
+    if (!readStringArray(json, "inputs", layer.input_names, model.error, false) ||
+        !readStringArray(json, "outputs", layer.output_names, model.error, false)) {
+        return false;
+    }
+    if (layer.input_names.empty()) {
+        std::string input_name;
+        if (readString(json, "input", input_name, model.error, false) && !input_name.empty()) {
+            layer.input_names.push_back(input_name);
+        }
+    }
+    if (!model.error.empty()) {
+        return false;
+    }
+    if (layer.input_names.empty()) {
+        std::string lhs;
+        std::string rhs;
+        readString(json, "lhs", lhs, model.error, false);
+        readString(json, "rhs", rhs, model.error, false);
+        if (!model.error.empty()) {
+            return false;
+        }
+        if (!lhs.empty() || !rhs.empty()) {
+            if (lhs.empty() || rhs.empty()) {
+                model.error = layer.name + ": add lhs/rhs must both be present";
+                return false;
+            }
+            layer.input_names.push_back(lhs);
+            layer.input_names.push_back(rhs);
+        }
+    }
+    if (layer.input_names.empty()) {
+        layer.input_names.push_back(current_tensor);
+    }
+    if (layer.output_names.empty()) {
+        std::string output_name;
+        if (readString(json, "output", output_name, model.error, false) && !output_name.empty()) {
+            layer.output_names.push_back(output_name);
+        }
+    }
+    if (!model.error.empty()) {
+        return false;
+    }
+    if (layer.output_names.empty()) {
+        layer.output_names.push_back(layer.name);
     }
 
     readUint(json, "in_channels", layer.in_channels, model.error, false);
@@ -516,18 +634,35 @@ bool parseLayer(const JsonValue& json, ModelDesc& model, TensorShape& current_sh
 
     TensorShape explicit_shape;
     if (readShape(json, "shape", explicit_shape, model.error, false) && !explicit_shape.dims.empty()) {
-        current_shape = explicit_shape;
+        TensorShape& shape = tensor_shapes[layer.input_names[0]];
+        shape = explicit_shape;
+        upsertTensor(model, tensor_shapes, layer.input_names[0], explicit_shape);
     }
     if (!model.error.empty()) {
         return false;
     }
 
-    if (!inferOutputShape(current_shape, layer, model.error)) {
+    std::vector<TensorShape> input_shapes;
+    for (const std::string& input_name : layer.input_names) {
+        auto it = tensor_shapes.find(input_name);
+        if (it == tensor_shapes.end()) {
+            model.error = layer.name + ": missing input tensor '" + input_name + "'";
+            return false;
+        }
+        input_shapes.push_back(it->second);
+    }
+
+    if (!inferOutputShape(input_shapes, layer, model.error)) {
         model.error = layer.name + ": " + model.error;
         return false;
     }
 
-    current_shape = layer.output_shape;
+    if (layer.output_names.size() != 1) {
+        model.error = layer.name + ": exactly one output tensor is currently supported";
+        return false;
+    }
+    upsertTensor(model, tensor_shapes, layer.output_names[0], layer.output_shape);
+    current_tensor = layer.output_names[0];
     model.layers.emplace_back(std::move(layer));
     return true;
 }
@@ -567,6 +702,10 @@ const char* layerTypeName(LayerType type) {
             return "relu";
         case LayerType::Flatten:
             return "flatten";
+        case LayerType::Add:
+            return "add";
+        case LayerType::GlobalAvgPool2D:
+            return "global_avg_pool2d";
         case LayerType::Unknown:
             return "unknown";
     }
@@ -589,6 +728,12 @@ LayerType layerTypeFromName(const std::string& name) {
     if (name == "flatten") {
         return LayerType::Flatten;
     }
+    if (name == "add") {
+        return LayerType::Add;
+    }
+    if (name == "global_avg_pool2d" || name == "global_avg_pool" || name == "globalaveragepool") {
+        return LayerType::GlobalAvgPool2D;
+    }
     return LayerType::Unknown;
 }
 
@@ -601,6 +746,15 @@ const ModelWeight* ModelDesc::weight(int index) const {
         return nullptr;
     }
     return &weights[static_cast<std::size_t>(index)];
+}
+
+const TensorDesc* ModelDesc::tensor(const std::string& name) const {
+    for (const TensorDesc& tensor_desc : tensors) {
+        if (tensor_desc.name == name) {
+            return &tensor_desc;
+        }
+    }
+    return nullptr;
 }
 
 ModelDesc loadModelFromEmbedded(const std::string& manifest_name) {
@@ -633,6 +787,13 @@ ModelDesc loadModelFromEmbedded(const std::string& manifest_name) {
         !readShape(root, "input_shape", model.input_shape, model.error)) {
         return model;
     }
+    readString(root, "input", model.input_name, model.error, false);
+    if (!model.error.empty()) {
+        return model;
+    }
+    if (model.input_name.empty()) {
+        model.input_name = "input";
+    }
     if (model.endianness.empty()) {
         model.endianness = "little";
     }
@@ -651,16 +812,19 @@ ModelDesc loadModelFromEmbedded(const std::string& manifest_name) {
         return model;
     }
 
-    TensorShape current_shape = model.input_shape;
+    std::map<std::string, TensorShape> tensor_shapes;
+    std::string current_tensor = model.input_name;
+    upsertTensor(model, tensor_shapes, current_tensor, model.input_shape);
     for (std::size_t i = 0; i < layers->array_value.size(); ++i) {
         if (layers->array_value[i].type != JsonValue::Type::Object) {
             model.error = "Layer entry must be an object";
             return model;
         }
-        if (!parseLayer(layers->array_value[i], model, current_shape, i)) {
+        if (!parseLayer(layers->array_value[i], model, tensor_shapes, current_tensor, i)) {
             return model;
         }
     }
+    model.output_name = current_tensor;
 
     return model;
 }

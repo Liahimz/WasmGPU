@@ -162,6 +162,57 @@ GeneratedWgsl generateLinear(const LayerDesc& layer) {
     return shader;
 }
 
+GeneratedWgsl generateAdd(const LayerDesc& layer) {
+    GeneratedWgsl shader;
+    shader.label = layer.name + "_wgsl";
+    shader.workgroup_x = 64;
+    shader.dispatch_x = ceilDiv(static_cast<uint32_t>(layer.output_shape.elementCount()), shader.workgroup_x);
+
+    std::ostringstream wgsl;
+    wgsl
+        << "@group(0) @binding(0) var<storage, read> left_tensor: array<f32>;\n"
+        << "@group(0) @binding(1) var<storage, read> right_tensor: array<f32>;\n"
+        << "@group(0) @binding(2) var<storage, read_write> output_tensor: array<f32>;\n\n"
+        << "const VALUE_COUNT: u32 = " << layer.output_shape.elementCount() << "u;\n\n"
+        << "@compute @workgroup_size(" << shader.workgroup_x << ", 1, 1)\n"
+        << "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        << "    let index = id.x;\n"
+        << "    if (index >= VALUE_COUNT) { return; }\n"
+        << "    output_tensor[index] = left_tensor[index] + right_tensor[index];\n"
+        << "}\n";
+    shader.source = wgsl.str();
+    return shader;
+}
+
+GeneratedWgsl generateGlobalAvgPool2d(const LayerDesc& layer) {
+    GeneratedWgsl shader;
+    shader.label = layer.name + "_wgsl";
+    shader.workgroup_x = 64;
+    shader.dispatch_x = ceilDiv(layer.output_shape.dims[0], shader.workgroup_x);
+
+    std::ostringstream wgsl;
+    wgsl
+        << "@group(0) @binding(0) var<storage, read> input_tensor: array<f32>;\n"
+        << "@group(0) @binding(1) var<storage, read_write> output_tensor: array<f32>;\n\n"
+        << "const C: u32 = " << layer.input_shape.dims[0] << "u;\n"
+        << "const H: u32 = " << layer.input_shape.dims[1] << "u;\n"
+        << "const W: u32 = " << layer.input_shape.dims[2] << "u;\n"
+        << "const PLANE: u32 = H * W;\n\n"
+        << "@compute @workgroup_size(" << shader.workgroup_x << ", 1, 1)\n"
+        << "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        << "    let c = id.x;\n"
+        << "    if (c >= C) { return; }\n"
+        << "    var sum = 0.0;\n"
+        << "    let base = c * PLANE;\n"
+        << "    for (var i = 0u; i < PLANE; i = i + 1u) {\n"
+        << "        sum = sum + input_tensor[base + i];\n"
+        << "    }\n"
+        << "    output_tensor[c] = sum / f32(PLANE);\n"
+        << "}\n";
+    shader.source = wgsl.str();
+    return shader;
+}
+
 } // namespace
 
 GeneratedWgsl generateLayerWgsl(const LayerDesc& layer) {
@@ -174,6 +225,10 @@ GeneratedWgsl generateLayerWgsl(const LayerDesc& layer) {
             return generateMaxPool2d(layer);
         case LayerType::Linear:
             return generateLinear(layer);
+        case LayerType::Add:
+            return generateAdd(layer);
+        case LayerType::GlobalAvgPool2D:
+            return generateGlobalAvgPool2d(layer);
         case LayerType::Flatten:
         case LayerType::Unknown:
             break;

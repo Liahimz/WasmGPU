@@ -1,0 +1,129 @@
+{
+  "name": "tiny_residual",
+  "dtype": "float32",
+  "endianness": "little",
+  "input": "input",
+  "input_shape": [
+    1,
+    4,
+    4
+  ],
+  "layers": [
+    {
+      "name": "conv0",
+      "type": "conv2d",
+      "inputs": [
+        "input"
+      ],
+      "outputs": [
+        "skip"
+      ],
+      "in_channels": 1,
+      "out_channels": 2,
+      "kernel": [
+        1,
+        1
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0
+      ],
+      "weights": "tiny_residual_conv0_weights_f32.bin",
+      "weights_shape": [
+        2,
+        1,
+        1,
+        1
+      ],
+      "bias": "tiny_residual_conv0_bias_f32.bin",
+      "bias_shape": [
+        2
+      ]
+    },
+    {
+      "name": "relu0",
+      "type": "relu",
+      "inputs": [
+        "skip"
+      ],
+      "outputs": [
+        "relu0"
+      ]
+    },
+    {
+      "name": "conv1",
+      "type": "conv2d",
+      "inputs": [
+        "relu0"
+      ],
+      "outputs": [
+        "main"
+      ],
+      "in_channels": 2,
+      "out_channels": 2,
+      "kernel": [
+        1,
+        1
+      ],
+      "stride": [
+        1,
+        1
+      ],
+      "padding": [
+        0,
+        0
+      ],
+      "weights": "tiny_residual_conv1_weights_f32.bin",
+      "weights_shape": [
+        2,
+        2,
+        1,
+        1
+      ],
+      "bias": "tiny_residual_conv1_bias_f32.bin",
+      "bias_shape": [
+        2
+      ]
+    },
+    {
+      "name": "add0",
+      "type": "add",
+      "lhs": "main",
+      "rhs": "skip",
+      "output": "add0"
+    },
+    {
+      "name": "relu1",
+      "type": "relu",
+      "input": "add0",
+      "output": "relu1"
+    },
+    {
+      "name": "gap0",
+      "type": "global_avg_pool2d",
+      "input": "relu1",
+      "output": "pool0"
+    },
+    {
+      "name": "linear0",
+      "type": "linear",
+      "input": "pool0",
+      "output": "logits",
+      "in_features": 2,
+      "out_features": 3,
+      "weights": "tiny_residual_linear0_weights_f32.bin",
+      "weights_shape": [
+        3,
+        2
+      ],
+      "bias": "tiny_residual_linear0_bias_f32.bin",
+      "bias_shape": [
+        3
+      ]
+    }
+  ]
+}
