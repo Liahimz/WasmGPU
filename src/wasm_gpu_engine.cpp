@@ -37,7 +37,7 @@ void WasmGpuEngine::configure(int target_size_) {
     target_size = target_size_;
 
     weights_ = network::loadTinyLenetWeights();
-    model_ = network::loadModelFromEmbedded("tiny_lenet_manifest.json");
+    model_ = network::loadModelFromEmbedded("lenet/tiny_lenet_manifest.json");
     if (model_.valid()) {
         std::cout << "Loaded embedded model manifest: " << model_.name
                   << " input=" << model_.input_shape.toString()

@@ -41,10 +41,17 @@ set(CMAKE_EXECUTABLE_SUFFIX ".js")
 
 include_directories(include)
 
-file(GLOB NETWORK_DATA_FILES CONFIGURE_DEPENDS
+option(WASM_GPU_INCLUDE_RESNET50_DATA "Embed generated network_data/resnet50 files" OFF)
+
+file(GLOB_RECURSE NETWORK_DATA_FILES CONFIGURE_DEPENDS
     "${NETWORK_DATA_DIR}/*.bin"
     "${NETWORK_DATA_DIR}/*.json"
 )
+set(EMBED_NETWORK_DATA_ARGS --recursive)
+if(NOT WASM_GPU_INCLUDE_RESNET50_DATA)
+    list(FILTER NETWORK_DATA_FILES EXCLUDE REGEX "/resnet50/")
+    list(APPEND EMBED_NETWORK_DATA_ARGS --exclude-dir resnet50)
+endif()
 file(GLOB SHADER_DATA_FILES CONFIGURE_DEPENDS
     "${SHADER_DATA_DIR}/*.wgsl"
 )
@@ -56,6 +63,7 @@ add_custom_command(
         --input-dir ${NETWORK_DATA_DIR}
         --template ${EMBEDDED_DATA_TEMPLATE}
         --output ${EMBEDDED_DATA_HEADER}
+        ${EMBED_NETWORK_DATA_ARGS}
     DEPENDS
         ${BUILD_SCRIPTS_DIR}/embed_network_data.py
         ${EMBEDDED_DATA_TEMPLATE}

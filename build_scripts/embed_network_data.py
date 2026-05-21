@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def symbol_name(path):
-    stem = re.sub(r"[^0-9A-Za-z_]", "_", path.name)
+    stem = re.sub(r"[^0-9A-Za-z_]", "_", path.as_posix())
     stem = re.sub(r"_+", "_", stem).strip("_")
     if stem and stem[0].isdigit():
         stem = "_" + stem
@@ -28,25 +28,36 @@ def main():
     parser.add_argument("--input-dir", type=Path, required=True)
     parser.add_argument("--template", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--recursive", action="store_true", help="Embed files from nested model-data directories.")
+    parser.add_argument("--exclude-dir", action="append", default=[], help="Relative directory to skip while embedding. Can be repeated.")
     args = parser.parse_args()
 
     files = []
     for pattern in ("*.bin", "*.json"):
-        files.extend(args.input_dir.glob(pattern))
-    files = sorted(path for path in files if path.is_file())
+        glob = args.input_dir.rglob if args.recursive else args.input_dir.glob
+        files.extend(glob(pattern))
+    excluded_dirs = {Path(value) for value in args.exclude_dir}
+    files = sorted(
+        path for path in files
+        if path.is_file() and not any(
+            excluded == path.relative_to(args.input_dir) or excluded in path.relative_to(args.input_dir).parents
+            for excluded in excluded_dirs
+        )
+    )
 
     array_rows = []
     blob_rows = []
 
     for path in files:
+        relative_path = path.relative_to(args.input_dir)
         data = path.read_bytes()
-        symbol = symbol_name(path)
+        symbol = symbol_name(relative_path)
         array_rows.append(
             f"static constexpr uint8_t {symbol}[] = {{\n"
             f"{format_bytes(data)}\n"
             f"}};"
         )
-        blob_rows.append(f'    {{"{path.name}", {symbol}, sizeof({symbol})}}')
+        blob_rows.append(f'    {{"{relative_path.as_posix()}", {symbol}, sizeof({symbol})}}')
 
     if not array_rows:
         array_rows.append("static constexpr uint8_t NETWORK_EMPTY[] = { 0x00 };")

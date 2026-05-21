@@ -74,6 +74,8 @@ Testing/
 network_trainer/data/
 network_trainer/checkpoints/
 
+# open source network weights
+network_data/resnet50/
 
 # mac 
 .DS_Store

@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATA_DIR = ROOT / "network_trainer" / "data"
-DEFAULT_OUT_DIR = ROOT / "network_data"
+DEFAULT_OUT_DIR = ROOT / "network_data" / "lenet"
 
 MNIST_FILES = {
     "train_images": "train-images-idx3-ubyte.gz",
@@ -30,6 +30,13 @@ MNIST_MIRRORS = [
     "https://ossci-datasets.s3.amazonaws.com/mnist/",
     "http://yann.lecun.com/exdb/mnist/",
 ]
+
+
+def embedded_data_name(path):
+    try:
+        return path.relative_to(ROOT / "network_data").as_posix()
+    except ValueError:
+        return path.name
 
 
 class TinyLeNet(nn.Module):
@@ -191,9 +198,9 @@ def export_weights(model, out_dir):
                 "kernel": [3, 3],
                 "stride": [1, 1],
                 "padding": [1, 1],
-                "weights": paths["conv0_weights"].name,
+                "weights": embedded_data_name(paths["conv0_weights"]),
                 "weights_shape": [8, 1, 3, 3],
-                "bias": paths["conv0_bias"].name,
+                "bias": embedded_data_name(paths["conv0_bias"]),
                 "bias_shape": [8],
             },
             {
@@ -209,9 +216,9 @@ def export_weights(model, out_dir):
                 "kernel": [3, 3],
                 "stride": [1, 1],
                 "padding": [1, 1],
-                "weights": paths["conv1_weights"].name,
+                "weights": embedded_data_name(paths["conv1_weights"]),
                 "weights_shape": [16, 8, 3, 3],
-                "bias": paths["conv1_bias"].name,
+                "bias": embedded_data_name(paths["conv1_bias"]),
                 "bias_shape": [16],
             },
             {
@@ -235,9 +242,9 @@ def export_weights(model, out_dir):
                 "type": "linear",
                 "in_features": 3136,
                 "out_features": 64,
-                "weights": paths["linear0_weights"].name,
+                "weights": embedded_data_name(paths["linear0_weights"]),
                 "weights_shape": [64, 3136],
-                "bias": paths["linear0_bias"].name,
+                "bias": embedded_data_name(paths["linear0_bias"]),
                 "bias_shape": [64],
             },
             {
@@ -245,9 +252,9 @@ def export_weights(model, out_dir):
                 "type": "linear",
                 "in_features": 64,
                 "out_features": 10,
-                "weights": paths["linear1_weights"].name,
+                "weights": embedded_data_name(paths["linear1_weights"]),
                 "weights_shape": [10, 64],
-                "bias": paths["linear1_bias"].name,
+                "bias": embedded_data_name(paths["linear1_bias"]),
                 "bias_shape": [10],
             },
         ],

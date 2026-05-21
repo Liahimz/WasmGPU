@@ -62,16 +62,16 @@ bool TinyLenetWeights::valid() const {
 TinyLenetWeights loadTinyLenetWeights() {
     TinyLenetWeights weights;
 
-    if (!readFloatBlob("tiny_lenet_conv_weights_f32.bin", 4 * 3 * 3, weights.conv_weights, weights.error)) {
+    if (!readFloatBlob("lenet/tiny_lenet_conv_weights_f32.bin", 4 * 3 * 3, weights.conv_weights, weights.error)) {
         return weights;
     }
-    if (!readFloatBlob("tiny_lenet_conv_bias_f32.bin", 4, weights.conv_bias, weights.error)) {
+    if (!readFloatBlob("lenet/tiny_lenet_conv_bias_f32.bin", 4, weights.conv_bias, weights.error)) {
         return weights;
     }
-    if (!readFloatBlob("tiny_lenet_linear_weights_f32.bin", 10 * 2704, weights.linear_weights, weights.error)) {
+    if (!readFloatBlob("lenet/tiny_lenet_linear_weights_f32.bin", 10 * 2704, weights.linear_weights, weights.error)) {
         return weights;
     }
-    if (!readFloatBlob("tiny_lenet_linear_bias_f32.bin", 10, weights.linear_bias, weights.error)) {
+    if (!readFloatBlob("lenet/tiny_lenet_linear_bias_f32.bin", 10, weights.linear_bias, weights.error)) {
         return weights;
     }
 
