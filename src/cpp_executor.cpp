@@ -230,6 +230,14 @@ bool CppExecutor::ready() const {
 }
 
 int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) const {
+    return infer(image, mode, network::cpu_conv::ConvTileMode::Oc4x4);
+}
+
+int CppExecutor::infer(
+    const std::vector<uint8_t>& image,
+    CppExecutorMode mode,
+    network::cpu_conv::ConvTileMode tile_mode
+) const {
     if (!ready()) {
         return -1;
     }
@@ -240,6 +248,7 @@ int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) 
         network::CpuGraphOptions options;
         options.use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
         options.use_threads = mode == CppExecutorMode::SimdThreads;
+        options.conv_tile_mode = tile_mode;
         return graph_.inferClassBytes(image, options);
     }
 
@@ -265,6 +274,14 @@ int CppExecutor::infer(const std::vector<uint8_t>& image, CppExecutorMode mode) 
 }
 
 std::vector<float> CppExecutor::infer(const std::vector<float>& input, CppExecutorMode mode) const {
+    return infer(input, mode, network::cpu_conv::ConvTileMode::Oc4x4);
+}
+
+std::vector<float> CppExecutor::infer(
+    const std::vector<float>& input,
+    CppExecutorMode mode,
+    network::cpu_conv::ConvTileMode tile_mode
+) const {
     if (!graph_.ready()) {
         return {};
     }
@@ -273,6 +290,7 @@ std::vector<float> CppExecutor::infer(const std::vector<float>& input, CppExecut
     network::CpuGraphOptions options;
     options.use_simd = mode == CppExecutorMode::Simd || mode == CppExecutorMode::SimdThreads;
     options.use_threads = mode == CppExecutorMode::SimdThreads;
+    options.conv_tile_mode = tile_mode;
     return graph_.infer(input, options);
 }
 

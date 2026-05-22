@@ -3,6 +3,7 @@ const startButton = document.getElementById("button_start");
 const outputDiv = document.getElementById("output");
 const benchmarkRunsInput = document.getElementById("benchmark_runs");
 const cpuBenchmarkModeSelect = document.getElementById("cpu_benchmark_mode");
+const cpuKernelModeSelect = document.getElementById("cpu_kernel_mode");
 let selectedFile = null;
 let worker = null;
 let mainRuntimePromise = null;
@@ -91,6 +92,7 @@ function loadImagePayload(file) {
           channels,
           repetitions,
           cpuMode: cpuBenchmarkModeSelect ? cpuBenchmarkModeSelect.value : "fast",
+          cpuKernelMode: cpuKernelModeSelect ? cpuKernelModeSelect.value : "4",
         });
       };
       img.src = event.target.result;
@@ -243,6 +245,21 @@ function shouldRunCpuMode(payload, mode) {
   return mode === "simd_threads";
 }
 
+function cpuKernelTiles(payload) {
+  if (payload.cpuKernelMode === "compare") {
+    return [4, 8];
+  }
+  const tile = Number.parseInt(payload.cpuKernelMode || "4", 10);
+  return tile === 8 ? [8] : [4];
+}
+
+function processResnetCpuTiled(engine, cppVec, width, height, channels, mode, tile) {
+  if (typeof engine.processResnetCpuTiled === "function") {
+    return engine.processResnetCpuTiled(cppVec, width, height, channels, mode, tile);
+  }
+  return engine.processResnetCpu(cppVec, width, height, channels, mode);
+}
+
 async function runOnMainThread(payload) {
   const { Module, engine } = await getMainRuntime();
   const cppVec = new Module.Uint8Vector();
@@ -254,7 +271,10 @@ async function runOnMainThread(payload) {
     const gpuRuns = [];
     const cpuScalarRuns = [];
     const cpuSimdRuns = [];
-    const cpuSimdThreadsRuns = [];
+    const cpuSimdThreadsRunsByTile = new Map();
+    for (const tile of cpuKernelTiles(payload)) {
+      cpuSimdThreadsRunsByTile.set(tile, []);
+    }
     let gpuTopK = "";
     let cpuTopK = "";
     let gpuPrediction = -1;
@@ -284,23 +304,27 @@ async function runOnMainThread(payload) {
       let cpuScalar = null;
       let cpuSimd = null;
       let cpuSimdThreads = null;
+      const primaryTile = cpuKernelTiles(payload)[0];
       if (shouldRunCpuMode(payload, "scalar")) {
         cpuScalar = timedCpuRun("cpu_scalar", run, () =>
-          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 0)
+          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 0, primaryTile)
         );
         cpuScalarRuns.push(cpuScalar);
       }
       if (shouldRunCpuMode(payload, "simd")) {
         cpuSimd = timedCpuRun("cpu_simd", run, () =>
-          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 1)
+          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 1, primaryTile)
         );
         cpuSimdRuns.push(cpuSimd);
       }
       if (shouldRunCpuMode(payload, "simd_threads")) {
-        cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () =>
-          engine.processResnetCpu(cppVec, payload.width, payload.height, payload.channels, 2)
-        );
-        cpuSimdThreadsRuns.push(cpuSimdThreads);
+        for (const tile of cpuKernelTiles(payload)) {
+          const name = `cpu_simd_threads_oc4x${tile}`;
+          cpuSimdThreads = timedCpuRun(name, run, () =>
+            processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 2, tile)
+          );
+          cpuSimdThreadsRunsByTile.get(tile).push(cpuSimdThreads);
+        }
       }
       cpuPredictions = {
         scalar: cpuScalar ? cpuScalar.prediction : null,
@@ -332,7 +356,9 @@ async function runOnMainThread(payload) {
         summarizeRuns("gpu", gpuRuns),
         cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,
         cpuSimdRuns.length ? summarizeRuns("cpu_simd", cpuSimdRuns) : null,
-        cpuSimdThreadsRuns.length ? summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns) : null,
+        ...Array.from(cpuSimdThreadsRunsByTile.entries()).map(([tile, runs]) =>
+          runs.length ? summarizeRuns(`cpu_simd_threads_oc4x${tile}`, runs) : null
+        ),
       ].filter(Boolean),
     };
   } finally {

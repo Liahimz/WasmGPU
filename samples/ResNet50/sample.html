@@ -27,6 +27,14 @@
         <option value="none">GPU only</option>
       </select>
     </label>
+    <label>
+      CPU kernel
+      <select id="cpu_kernel_mode">
+        <option value="4" selected>OC4 x 4</option>
+        <option value="8">OC4 x 8</option>
+        <option value="compare">Compare OC4 x 4/8</option>
+      </select>
+    </label>
     <button id="button_start">Process</button>
   </div>
   <div id="output"></div>

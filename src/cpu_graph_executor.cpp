@@ -6,12 +6,21 @@
 
 #include <algorithm>
 #include <cmath>
+#include <chrono>
+#include <cstdint>
+#include <iostream>
 #include <limits>
 #include <map>
 #include <utility>
 
 namespace network {
 namespace {
+
+using Clock = std::chrono::high_resolution_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end) {
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
 
 const std::vector<float>* requireWeight(const ModelDesc& model, int index, std::string& error, const char* role) {
     const ModelWeight* weight = model.weight(index);
@@ -20,6 +29,30 @@ const std::vector<float>* requireWeight(const ModelDesc& model, int index, std::
         return nullptr;
     }
     return &weight->values;
+}
+
+std::string cpuModeName(CpuGraphOptions options) {
+    if (options.use_simd && options.use_threads) {
+        return "simd_threads";
+    }
+    if (options.use_simd) {
+        return "simd";
+    }
+    if (options.use_threads) {
+        return "threads";
+    }
+    return "scalar";
+}
+
+std::string shapeText(const TensorShape& shape) {
+    return shape.toString();
+}
+
+double percent(std::uint64_t part, std::uint64_t total) {
+    if (total == 0) {
+        return 0.0;
+    }
+    return static_cast<double>(part) * 100.0 / static_cast<double>(total);
 }
 
 template <typename Body>
@@ -77,6 +110,7 @@ std::vector<float> runConv2d(
         *bias,
         options.use_simd,
         options.use_threads,
+        options.conv_tile_mode,
         output
     )) {
         return output;
@@ -325,6 +359,10 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
     std::map<std::string, std::vector<float>> tensors;
     tensors[model_->input_name] = input;
     std::string error;
+    std::uint32_t conv_layers = 0;
+    std::uint32_t specialized_conv_layers = 0;
+    std::uint64_t conv_macs = 0;
+    std::uint64_t specialized_conv_macs = 0;
 
     for (std::size_t layer_index = 0; layer_index < model_->layers.size(); ++layer_index) {
         const LayerDesc& layer = model_->layers[layer_index];
@@ -339,6 +377,19 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
 
         const std::vector<float>& first_input = input_it->second;
         std::vector<float> output;
+        const char* kernel_name = layerTypeName(layer.type);
+        if (layer.type == LayerType::Conv2D) {
+            kernel_name = cpu_conv::selectedKernelName(layer, options.use_simd, options.conv_tile_mode);
+            const std::uint64_t macs = cpu_conv::estimateConvMacs(layer);
+            conv_layers += 1;
+            conv_macs += macs;
+            if (options.use_simd && cpu_conv::supportsSpecializedConv2d(layer)) {
+                specialized_conv_layers += 1;
+                specialized_conv_macs += macs;
+            }
+        }
+
+        const auto layer_start = Clock::now();
         switch (layer.type) {
             case LayerType::Conv2D:
                 output = runConv2d(*model_, packed_conv_weights_, static_cast<int>(layer_index), layer, first_input, options, error);
@@ -372,6 +423,17 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
             case LayerType::Unknown:
                 return {};
         }
+        const auto layer_end = Clock::now();
+
+        std::cout << "[cpu_layer] mode=" << cpuModeName(options)
+                  << " index=" << layer_index
+                  << " name=" << layer.name
+                  << " type=" << layerTypeName(layer.type)
+                  << " input=" << shapeText(layer.input_shape)
+                  << " output=" << shapeText(layer.output_shape)
+                  << " kernel=" << kernel_name
+                  << " ms=" << elapsedMs(layer_start, layer_end)
+                  << std::endl;
 
         if (!error.empty() || output.empty()) {
             return {};
@@ -380,6 +442,12 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
     }
 
     auto output_it = tensors.find(model_->output_name);
+    std::cout << "[cpu_conv_coverage] mode=" << cpuModeName(options)
+              << " specialized_layers=" << specialized_conv_layers << "/" << conv_layers
+              << " specialized_macs=" << percent(specialized_conv_macs, conv_macs) << "%"
+              << " fallback_macs=" << percent(conv_macs - specialized_conv_macs, conv_macs) << "%"
+              << " total_macs=" << conv_macs
+              << std::endl;
     return output_it == tensors.end() ? std::vector<float>{} : output_it->second;
 }
 

@@ -93,6 +93,21 @@ function timedCpuRun(name, run, fn) {
   };
 }
 
+function cpuKernelTiles(cpuKernelMode) {
+  if (cpuKernelMode === "compare") {
+    return [4, 8];
+  }
+  const tile = Number.parseInt(cpuKernelMode || "4", 10);
+  return tile === 8 ? [8] : [4];
+}
+
+function processResnetCpuTiled(cppVec, width, height, channels, mode, tile) {
+  if (typeof engineInstance.processResnetCpuTiled === "function") {
+    return engineInstance.processResnetCpuTiled(cppVec, width, height, channels, mode, tile);
+  }
+  return engineInstance.processResnetCpu(cppVec, width, height, channels, mode);
+}
+
 onmessage = async function(msg) {
   try {
     await readyPromise;
@@ -109,6 +124,7 @@ onmessage = async function(msg) {
     const channels = msg.data.channels || 4;
     const repetitions = Math.max(1, Math.min(20, msg.data.repetitions || 1));
     const cpuMode = msg.data.cpuMode || "fast";
+    const kernelTiles = cpuKernelTiles(msg.data.cpuKernelMode || "4");
 
     const cppVec = new moduleObject.Uint8Vector();
     for (let i = 0; i < arr.length; ++i) {
@@ -118,7 +134,10 @@ onmessage = async function(msg) {
     const gpuRuns = [];
     const cpuScalarRuns = [];
     const cpuSimdRuns = [];
-    const cpuSimdThreadsRuns = [];
+    const cpuSimdThreadsRunsByTile = new Map();
+    for (const tile of kernelTiles) {
+      cpuSimdThreadsRunsByTile.set(tile, []);
+    }
     let gpuTopK = "";
     let cpuTopK = "";
     let gpuPrediction = -1;
@@ -146,15 +165,20 @@ onmessage = async function(msg) {
       let cpuScalar = null;
       let cpuSimd = null;
       let cpuSimdThreads = null;
+      const primaryTile = kernelTiles[0];
       if (cpuMode === "full") {
-        cpuScalar = timedCpuRun("cpu_scalar", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 0));
-        cpuSimd = timedCpuRun("cpu_simd", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 1));
+        cpuScalar = timedCpuRun("cpu_scalar", run, () => processResnetCpuTiled(cppVec, width, height, channels, 0, primaryTile));
+        cpuSimd = timedCpuRun("cpu_simd", run, () => processResnetCpuTiled(cppVec, width, height, channels, 1, primaryTile));
         cpuScalarRuns.push(cpuScalar);
         cpuSimdRuns.push(cpuSimd);
       }
       if (cpuMode !== "none") {
-        cpuSimdThreads = timedCpuRun("cpu_simd_threads", run, () => engineInstance.processResnetCpu(cppVec, width, height, channels, 2));
-        cpuSimdThreadsRuns.push(cpuSimdThreads);
+        for (const tile of kernelTiles) {
+          cpuSimdThreads = timedCpuRun(`cpu_simd_threads_oc4x${tile}`, run, () =>
+            processResnetCpuTiled(cppVec, width, height, channels, 2, tile)
+          );
+          cpuSimdThreadsRunsByTile.get(tile).push(cpuSimdThreads);
+        }
       }
       cpuPredictions = {
         scalar: cpuScalar ? cpuScalar.prediction : null,
@@ -186,7 +210,9 @@ onmessage = async function(msg) {
         summarizeRuns("gpu", gpuRuns),
         cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,
         cpuSimdRuns.length ? summarizeRuns("cpu_simd", cpuSimdRuns) : null,
-        cpuSimdThreadsRuns.length ? summarizeRuns("cpu_simd_threads", cpuSimdThreadsRuns) : null,
+        ...Array.from(cpuSimdThreadsRunsByTile.entries()).map(([tile, runs]) =>
+          runs.length ? summarizeRuns(`cpu_simd_threads_oc4x${tile}`, runs) : null
+        ),
       ].filter(Boolean),
     }, preprocessedImage ? [preprocessedImage.buffer] : []);
     cppVec.delete();

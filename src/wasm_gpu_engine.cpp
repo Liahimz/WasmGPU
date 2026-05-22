@@ -29,6 +29,16 @@ const char* cpuModeName(int mode) {
     return "simd";
 }
 
+network::cpu_conv::ConvTileMode convTileMode(int tile_mode) {
+    if (tile_mode == 8) {
+        return network::cpu_conv::ConvTileMode::Oc4x8;
+    }
+    if (tile_mode == 1) {
+        return network::cpu_conv::ConvTileMode::Oc4x1;
+    }
+    return network::cpu_conv::ConvTileMode::Oc4x4;
+}
+
 std::vector<std::string> parseStringArray(const std::string& text) {
     std::vector<std::string> result;
     std::string current;
@@ -139,13 +149,24 @@ ProcessResult WasmGpuEngine::processResnetCpu(
     int channels,
     int mode
 ) {
+    return processResnetCpuTiled(data, width, height, channels, mode, 4);
+}
+
+ProcessResult WasmGpuEngine::processResnetCpuTiled(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels,
+    int mode,
+    int tile_mode
+) {
     const auto total_start = Clock::now();
     const auto preprocess_start = Clock::now();
     std::vector<float> input = preprocessResnetInput(data, width, height, channels);
     const auto preprocess_end = Clock::now();
 
     const auto inference_start = Clock::now();
-    std::vector<float> logits = cpu_.infer(input, static_cast<CppExecutorMode>(mode));
+    std::vector<float> logits = cpu_.infer(input, static_cast<CppExecutorMode>(mode), convTileMode(tile_mode));
     const auto inference_end = Clock::now();
 
     ProcessResult result;
@@ -155,6 +176,7 @@ ProcessResult WasmGpuEngine::processResnetCpu(
     result.class_label = classLabel(result.prediction);
     result.top_k = topKText(logits, 5);
     std::cout << "[timing] resnet_cpu mode=" << cpuModeName(mode)
+              << " conv_tile=oc4x" << (tile_mode == 8 ? 8 : (tile_mode == 1 ? 1 : 4))
               << " preprocess=" << elapsedMs(preprocess_start, preprocess_end)
               << "ms inference=" << elapsedMs(inference_start, inference_end)
               << "ms total=" << elapsedMs(total_start, inference_end)
