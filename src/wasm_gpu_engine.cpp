@@ -160,13 +160,30 @@ ProcessResult WasmGpuEngine::processResnetCpuTiled(
     int mode,
     int tile_mode
 ) {
+    return processResnetCpuProfiled(data, width, height, channels, mode, tile_mode, false);
+}
+
+ProcessResult WasmGpuEngine::processResnetCpuProfiled(
+    const std::vector<uint8_t>& data,
+    int width,
+    int height,
+    int channels,
+    int mode,
+    int tile_mode,
+    bool log_layers
+) {
     const auto total_start = Clock::now();
     const auto preprocess_start = Clock::now();
     std::vector<float> input = preprocessResnetInput(data, width, height, channels);
     const auto preprocess_end = Clock::now();
 
     const auto inference_start = Clock::now();
-    std::vector<float> logits = cpu_.infer(input, static_cast<CppExecutorMode>(mode), convTileMode(tile_mode));
+    std::vector<float> logits = cpu_.infer(
+        input,
+        static_cast<CppExecutorMode>(mode),
+        convTileMode(tile_mode),
+        log_layers
+    );
     const auto inference_end = Clock::now();
 
     ProcessResult result;

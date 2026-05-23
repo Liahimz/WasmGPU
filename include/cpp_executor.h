@@ -22,8 +22,10 @@ public:
     bool ready() const;
     int infer(const std::vector<uint8_t>& image, CppExecutorMode mode) const;
     int infer(const std::vector<uint8_t>& image, CppExecutorMode mode, network::cpu_conv::ConvTileMode tile_mode) const;
+    int infer(const std::vector<uint8_t>& image, CppExecutorMode mode, network::cpu_conv::ConvTileMode tile_mode, bool log_layers) const;
     std::vector<float> infer(const std::vector<float>& input, CppExecutorMode mode) const;
     std::vector<float> infer(const std::vector<float>& input, CppExecutorMode mode, network::cpu_conv::ConvTileMode tile_mode) const;
+    std::vector<float> infer(const std::vector<float>& input, CppExecutorMode mode, network::cpu_conv::ConvTileMode tile_mode, bool log_layers) const;
     void prepareSyntheticLarge() const;
     int inferSyntheticLarge(CppExecutorMode mode, uint32_t input_seed) const;
 

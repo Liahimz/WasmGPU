@@ -43,6 +43,7 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
 #endif
         .function("processResnetCpu", &WasmGpuEngine::processResnetCpu)
         .function("processResnetCpuTiled", &WasmGpuEngine::processResnetCpuTiled)
+        .function("processResnetCpuProfiled", &WasmGpuEngine::processResnetCpuProfiled)
         .function("benchmarkCpuLarge", &WasmGpuEngine::benchmarkCpuLarge)
         .function("prepareSyntheticLargeData", &WasmGpuEngine::prepareSyntheticLargeData)
 #if defined(BUILD_WASM_WEBGPU_ASYNC)

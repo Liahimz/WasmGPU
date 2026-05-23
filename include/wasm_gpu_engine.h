@@ -32,6 +32,7 @@ public:
     ProcessResult processResnet(const std::vector<uint8_t>& data, int width, int height, int channels);
     ProcessResult processResnetCpu(const std::vector<uint8_t>& data, int width, int height, int channels, int mode);
     ProcessResult processResnetCpuTiled(const std::vector<uint8_t>& data, int width, int height, int channels, int mode, int tile_mode);
+    ProcessResult processResnetCpuProfiled(const std::vector<uint8_t>& data, int width, int height, int channels, int mode, int tile_mode, bool log_layers);
     int benchmarkCpuLarge(int mode, int input_seed);
     void prepareSyntheticLargeData();
     int benchmarkGpuLarge(int input_seed);

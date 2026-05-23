@@ -11,6 +11,7 @@
 #include <iostream>
 #include <limits>
 #include <map>
+#include <string>
 #include <utility>
 
 namespace network {
@@ -69,6 +70,40 @@ void runRange(std::size_t begin, std::size_t end, std::size_t grain_size, bool u
     }
 }
 
+struct TensorValue {
+    std::vector<float> data;
+    TensorShape shape;
+    bool c4 = false;
+};
+
+bool canUseC4Graph(const ModelDesc& model, const CpuGraphOptions& options) {
+    if (!options.use_simd || !options.use_c4_layout) {
+        return false;
+    }
+#if !defined(__wasm_simd128__)
+    return false;
+#else
+    for (const LayerDesc& layer : model.layers) {
+        if (layer.type == LayerType::Conv2D && !cpu_conv::supportsSpecializedConv2d(layer)) {
+            return false;
+        }
+    }
+    return model.input_shape.dims.size() == 3;
+#endif
+}
+
+const std::vector<float>* findPackedWeights(
+    const std::vector<cpu_conv::PackedConvWeights>& packed_conv_weights,
+    int layer_index
+) {
+    for (const cpu_conv::PackedConvWeights& packed : packed_conv_weights) {
+        if (packed.layer_index == layer_index) {
+            return &packed.oc4_weights;
+        }
+    }
+    return nullptr;
+}
+
 std::vector<float> runConv2d(
     const ModelDesc& model,
     const std::vector<cpu_conv::PackedConvWeights>& packed_conv_weights,
@@ -95,13 +130,7 @@ std::vector<float> runConv2d(
     const uint32_t out_w = layer.output_shape.dims[2];
 
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
-    const std::vector<float>* packed_oc4_weights = nullptr;
-    for (const cpu_conv::PackedConvWeights& packed : packed_conv_weights) {
-        if (packed.layer_index == layer_index) {
-            packed_oc4_weights = &packed.oc4_weights;
-            break;
-        }
-    }
+    const std::vector<float>* packed_oc4_weights = findPackedWeights(packed_conv_weights, layer_index);
     if (cpu_conv::runSpecializedConv2d(
         layer,
         input,
@@ -155,6 +184,42 @@ std::vector<float> runConv2d(
     return output;
 }
 
+std::vector<float> runConv2dC4(
+    const ModelDesc& model,
+    const std::vector<cpu_conv::PackedConvWeights>& packed_conv_weights,
+    int layer_index,
+    const LayerDesc& layer,
+    const std::vector<float>& input,
+    const CpuGraphOptions& options,
+    std::string& error
+) {
+    const std::vector<float>* weights = requireWeight(model, layer.weights_index, error, "conv2d");
+    if (!weights) {
+        return {};
+    }
+    const std::vector<float>* bias = requireWeight(model, layer.bias_index, error, "conv2d bias");
+    if (!bias) {
+        return {};
+    }
+
+    std::vector<float> output;
+    if (!cpu_conv::runSpecializedConv2dC4(
+        layer,
+        input,
+        *weights,
+        findPackedWeights(packed_conv_weights, layer_index),
+        *bias,
+        options.use_simd,
+        options.use_threads,
+        options.conv_tile_mode,
+        output
+    )) {
+        error = layer.name + ": C4 conv fallback is not available";
+        return {};
+    }
+    return output;
+}
+
 std::vector<float> runRelu(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
     std::vector<float> output(layer.output_shape.elementCount(), 0.0f);
     if (options.use_simd) {
@@ -171,6 +236,37 @@ std::vector<float> runRelu(const LayerDesc& layer, const std::vector<float>& inp
         }
     } else {
         runRange(0, output.size(), 256, options.use_threads, [&](std::size_t index) {
+            output[index] = std::max(input[index], 0.0f);
+        });
+    }
+    return output;
+}
+
+std::vector<float> runReluC4(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
+    const uint32_t channels = layer.output_shape.dims[0];
+    const uint32_t height = layer.output_shape.dims[1];
+    const uint32_t width = layer.output_shape.dims[2];
+    const uint32_t c4 = (channels + 3) / 4;
+    const std::size_t count = static_cast<std::size_t>(height) * width * c4 * 4;
+    if (input.size() != count) {
+        return {};
+    }
+
+    std::vector<float> output(count, 0.0f);
+    if (options.use_simd) {
+        if (options.use_threads) {
+            constexpr std::size_t ChunkSize = 4096;
+            const std::size_t chunks = (count + ChunkSize - 1) / ChunkSize;
+            parallel::parallelFor(0, chunks, [&](std::size_t chunk) {
+                const std::size_t begin = chunk * ChunkSize;
+                const std::size_t end = std::min(begin + ChunkSize, count);
+                simd_math::reluSimd(input.data() + begin, output.data() + begin, end - begin);
+            });
+        } else {
+            simd_math::reluSimd(input.data(), output.data(), count);
+        }
+    } else {
+        runRange(0, count, 256, options.use_threads, [&](std::size_t index) {
             output[index] = std::max(input[index], 0.0f);
         });
     }
@@ -227,6 +323,54 @@ std::vector<float> runMaxPool2d(const LayerDesc& layer, const std::vector<float>
     return output;
 }
 
+std::vector<float> runMaxPool2dC4(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
+    const uint32_t channels = layer.input_shape.dims[0];
+    const uint32_t in_h = layer.input_shape.dims[1];
+    const uint32_t in_w = layer.input_shape.dims[2];
+    const uint32_t out_h = layer.output_shape.dims[1];
+    const uint32_t out_w = layer.output_shape.dims[2];
+    const uint32_t c4 = (channels + 3) / 4;
+
+    std::vector<float> output(static_cast<std::size_t>(out_h) * out_w * c4 * 4, -std::numeric_limits<float>::infinity());
+    const std::size_t total = static_cast<std::size_t>(out_h) * out_w * c4;
+    runRange(0, total, 64, options.use_threads, [&](std::size_t index) {
+        const uint32_t block = static_cast<uint32_t>(index % c4);
+        const uint32_t spatial = static_cast<uint32_t>(index / c4);
+        const uint32_t oy = spatial / out_w;
+        const uint32_t ox = spatial % out_w;
+        float best[4] = {
+            -std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity(),
+            -std::numeric_limits<float>::infinity()
+        };
+
+        for (uint32_t ky = 0; ky < layer.kernel_y; ++ky) {
+            const int iy = static_cast<int>(oy * layer.stride_y + ky) - static_cast<int>(layer.padding_y);
+            if (iy < 0 || iy >= static_cast<int>(in_h)) {
+                continue;
+            }
+            for (uint32_t kx = 0; kx < layer.kernel_x; ++kx) {
+                const int ix = static_cast<int>(ox * layer.stride_x + kx) - static_cast<int>(layer.padding_x);
+                if (ix < 0 || ix >= static_cast<int>(in_w)) {
+                    continue;
+                }
+                const float* src = input.data() + ((static_cast<std::size_t>(iy) * in_w + static_cast<uint32_t>(ix)) * c4 + block) * 4;
+                for (uint32_t lane = 0; lane < 4; ++lane) {
+                    best[lane] = std::max(best[lane], src[lane]);
+                }
+            }
+        }
+
+        float* dst = output.data() + ((static_cast<std::size_t>(oy) * out_w + ox) * c4 + block) * 4;
+        dst[0] = best[0];
+        dst[1] = best[1];
+        dst[2] = best[2];
+        dst[3] = best[3];
+    });
+    return output;
+}
+
 std::vector<float> runAdd(
     const LayerDesc& layer,
     const std::vector<float>& left,
@@ -240,6 +384,23 @@ std::vector<float> runAdd(
 
     std::vector<float> output(count, 0.0f);
     runRange(0, count, 256, options.use_threads, [&](std::size_t index) {
+        output[index] = left[index] + right[index];
+    });
+    return output;
+}
+
+std::vector<float> runAddC4(const LayerDesc& layer, const std::vector<float>& left, const std::vector<float>& right, const CpuGraphOptions& options) {
+    const uint32_t channels = layer.output_shape.dims[0];
+    const uint32_t height = layer.output_shape.dims[1];
+    const uint32_t width = layer.output_shape.dims[2];
+    const uint32_t c4 = (channels + 3) / 4;
+    const std::size_t count = static_cast<std::size_t>(height) * width * c4 * 4;
+    if (left.size() != count || right.size() != count) {
+        return {};
+    }
+
+    std::vector<float> output(count, 0.0f);
+    runRange(0, count, 1024, options.use_threads, [&](std::size_t index) {
         output[index] = left[index] + right[index];
     });
     return output;
@@ -261,6 +422,32 @@ std::vector<float> runGlobalAvgPool2d(const LayerDesc& layer, const std::vector<
             ? simd_math::sumSimd(input.data() + base, plane)
             : simd_math::sumScalar(input.data() + base, plane);
         output[channel] = sum / static_cast<float>(plane);
+    });
+    return output;
+}
+
+std::vector<float> runGlobalAvgPool2dC4(const LayerDesc& layer, const std::vector<float>& input, const CpuGraphOptions& options) {
+    const uint32_t channels = layer.input_shape.dims[0];
+    const uint32_t height = layer.input_shape.dims[1];
+    const uint32_t width = layer.input_shape.dims[2];
+    const uint32_t c4 = (channels + 3) / 4;
+    const std::size_t expected = static_cast<std::size_t>(height) * width * c4 * 4;
+    if (input.size() != expected) {
+        return {};
+    }
+
+    std::vector<float> output(channels, 0.0f);
+    runRange(0, channels, 4, options.use_threads, [&](std::size_t channel) {
+        const uint32_t c = static_cast<uint32_t>(channel);
+        const uint32_t block = c / 4;
+        const uint32_t lane = c % 4;
+        float sum = 0.0f;
+        for (uint32_t y = 0; y < height; ++y) {
+            for (uint32_t x = 0; x < width; ++x) {
+                sum += input[((static_cast<std::size_t>(y) * width + x) * c4 + block) * 4 + lane];
+            }
+        }
+        output[channel] = sum / static_cast<float>(height * width);
     });
     return output;
 }
@@ -356,8 +543,13 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
         return {};
     }
 
-    std::map<std::string, std::vector<float>> tensors;
-    tensors[model_->input_name] = input;
+    const bool use_c4 = canUseC4Graph(*model_, options);
+    std::map<std::string, TensorValue> tensors;
+    tensors[model_->input_name] = TensorValue{
+        use_c4 ? cpu_conv::nchwToC4(input, model_->input_shape) : input,
+        model_->input_shape,
+        use_c4
+    };
     std::string error;
     std::uint32_t conv_layers = 0;
     std::uint32_t specialized_conv_layers = 0;
@@ -375,11 +567,14 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
             return {};
         }
 
-        const std::vector<float>& first_input = input_it->second;
+        const TensorValue& first_input = input_it->second;
         std::vector<float> output;
+        bool output_c4 = false;
         const char* kernel_name = layerTypeName(layer.type);
         if (layer.type == LayerType::Conv2D) {
-            kernel_name = cpu_conv::selectedKernelName(layer, options.use_simd, options.conv_tile_mode);
+            kernel_name = first_input.c4
+                ? cpu_conv::selectedKernelNameC4(layer, options.use_simd, options.conv_tile_mode)
+                : cpu_conv::selectedKernelName(layer, options.use_simd, options.conv_tile_mode);
             const std::uint64_t macs = cpu_conv::estimateConvMacs(layer);
             conv_layers += 1;
             conv_macs += macs;
@@ -392,16 +587,23 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
         const auto layer_start = Clock::now();
         switch (layer.type) {
             case LayerType::Conv2D:
-                output = runConv2d(*model_, packed_conv_weights_, static_cast<int>(layer_index), layer, first_input, options, error);
+                if (first_input.c4) {
+                    output = runConv2dC4(*model_, packed_conv_weights_, static_cast<int>(layer_index), layer, first_input.data, options, error);
+                    output_c4 = true;
+                } else {
+                    output = runConv2d(*model_, packed_conv_weights_, static_cast<int>(layer_index), layer, first_input.data, options, error);
+                }
                 break;
             case LayerType::Relu:
-                output = runRelu(layer, first_input, options);
+                output = first_input.c4 ? runReluC4(layer, first_input.data, options) : runRelu(layer, first_input.data, options);
+                output_c4 = first_input.c4;
                 break;
             case LayerType::MaxPool2D:
-                output = runMaxPool2d(layer, first_input, options);
+                output = first_input.c4 ? runMaxPool2dC4(layer, first_input.data, options) : runMaxPool2d(layer, first_input.data, options);
+                output_c4 = first_input.c4;
                 break;
             case LayerType::Flatten:
-                output = first_input;
+                output = first_input.c4 ? cpu_conv::c4ToNchw(first_input.data, first_input.shape) : first_input.data;
                 break;
             case LayerType::Add: {
                 if (layer.input_names.size() != 2) {
@@ -411,44 +613,61 @@ std::vector<float> CpuGraphExecutor::infer(const std::vector<float>& input, CpuG
                 if (right_it == tensors.end()) {
                     return {};
                 }
-                output = runAdd(layer, first_input, right_it->second, options);
+                if (first_input.c4 != right_it->second.c4) {
+                    return {};
+                }
+                output = first_input.c4
+                    ? runAddC4(layer, first_input.data, right_it->second.data, options)
+                    : runAdd(layer, first_input.data, right_it->second.data, options);
+                output_c4 = first_input.c4;
                 break;
             }
             case LayerType::GlobalAvgPool2D:
-                output = runGlobalAvgPool2d(layer, first_input, options);
+                output = first_input.c4
+                    ? runGlobalAvgPool2dC4(layer, first_input.data, options)
+                    : runGlobalAvgPool2d(layer, first_input.data, options);
                 break;
             case LayerType::Linear:
-                output = runLinear(*model_, layer, first_input, options, error);
+                output = runLinear(*model_, layer, first_input.data, options, error);
                 break;
             case LayerType::Unknown:
                 return {};
         }
         const auto layer_end = Clock::now();
 
-        std::cout << "[cpu_layer] mode=" << cpuModeName(options)
-                  << " index=" << layer_index
-                  << " name=" << layer.name
-                  << " type=" << layerTypeName(layer.type)
-                  << " input=" << shapeText(layer.input_shape)
-                  << " output=" << shapeText(layer.output_shape)
-                  << " kernel=" << kernel_name
-                  << " ms=" << elapsedMs(layer_start, layer_end)
-                  << std::endl;
+        if (options.log_layers) {
+            std::cout << "[cpu_layer] mode=" << cpuModeName(options)
+                      << " layout=" << (first_input.c4 ? "c4" : "nchw")
+                      << " index=" << layer_index
+                      << " name=" << layer.name
+                      << " type=" << layerTypeName(layer.type)
+                      << " input=" << shapeText(layer.input_shape)
+                      << " output=" << shapeText(layer.output_shape)
+                      << " kernel=" << kernel_name
+                      << " ms=" << elapsedMs(layer_start, layer_end)
+                      << std::endl;
+        }
 
         if (!error.empty() || output.empty()) {
             return {};
         }
-        tensors[layer.output_names[0]] = std::move(output);
+        tensors[layer.output_names[0]] = TensorValue{std::move(output), layer.output_shape, output_c4};
     }
 
     auto output_it = tensors.find(model_->output_name);
-    std::cout << "[cpu_conv_coverage] mode=" << cpuModeName(options)
-              << " specialized_layers=" << specialized_conv_layers << "/" << conv_layers
-              << " specialized_macs=" << percent(specialized_conv_macs, conv_macs) << "%"
-              << " fallback_macs=" << percent(conv_macs - specialized_conv_macs, conv_macs) << "%"
-              << " total_macs=" << conv_macs
-              << std::endl;
-    return output_it == tensors.end() ? std::vector<float>{} : output_it->second;
+    if (options.log_layers) {
+        std::cout << "[cpu_conv_coverage] mode=" << cpuModeName(options)
+                  << " layout=" << (use_c4 ? "c4" : "nchw")
+                  << " specialized_layers=" << specialized_conv_layers << "/" << conv_layers
+                  << " specialized_macs=" << percent(specialized_conv_macs, conv_macs) << "%"
+                  << " fallback_macs=" << percent(conv_macs - specialized_conv_macs, conv_macs) << "%"
+                  << " total_macs=" << conv_macs
+                  << std::endl;
+    }
+    if (output_it == tensors.end()) {
+        return {};
+    }
+    return output_it->second.c4 ? cpu_conv::c4ToNchw(output_it->second.data, output_it->second.shape) : output_it->second.data;
 }
 
 std::vector<float> CpuGraphExecutor::inferBytes(const std::vector<uint8_t>& input, CpuGraphOptions options) const {

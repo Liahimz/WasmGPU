@@ -4,6 +4,7 @@ const outputDiv = document.getElementById("output");
 const benchmarkRunsInput = document.getElementById("benchmark_runs");
 const cpuBenchmarkModeSelect = document.getElementById("cpu_benchmark_mode");
 const cpuKernelModeSelect = document.getElementById("cpu_kernel_mode");
+const cpuProfileLoggingInput = document.getElementById("cpu_profile_logging");
 let selectedFile = null;
 let worker = null;
 let mainRuntimePromise = null;
@@ -93,6 +94,7 @@ function loadImagePayload(file) {
           repetitions,
           cpuMode: cpuBenchmarkModeSelect ? cpuBenchmarkModeSelect.value : "fast",
           cpuKernelMode: cpuKernelModeSelect ? cpuKernelModeSelect.value : "4",
+          cpuProfileLogging: cpuProfileLoggingInput ? cpuProfileLoggingInput.checked : false,
         });
       };
       img.src = event.target.result;
@@ -253,7 +255,10 @@ function cpuKernelTiles(payload) {
   return tile === 8 ? [8] : [4];
 }
 
-function processResnetCpuTiled(engine, cppVec, width, height, channels, mode, tile) {
+function processResnetCpuTiled(engine, cppVec, width, height, channels, mode, tile, logLayers) {
+  if (typeof engine.processResnetCpuProfiled === "function") {
+    return engine.processResnetCpuProfiled(cppVec, width, height, channels, mode, tile, Boolean(logLayers));
+  }
   if (typeof engine.processResnetCpuTiled === "function") {
     return engine.processResnetCpuTiled(cppVec, width, height, channels, mode, tile);
   }
@@ -307,13 +312,13 @@ async function runOnMainThread(payload) {
       const primaryTile = cpuKernelTiles(payload)[0];
       if (shouldRunCpuMode(payload, "scalar")) {
         cpuScalar = timedCpuRun("cpu_scalar", run, () =>
-          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 0, primaryTile)
+          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 0, primaryTile, payload.cpuProfileLogging)
         );
         cpuScalarRuns.push(cpuScalar);
       }
       if (shouldRunCpuMode(payload, "simd")) {
         cpuSimd = timedCpuRun("cpu_simd", run, () =>
-          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 1, primaryTile)
+          processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 1, primaryTile, payload.cpuProfileLogging)
         );
         cpuSimdRuns.push(cpuSimd);
       }
@@ -321,7 +326,7 @@ async function runOnMainThread(payload) {
         for (const tile of cpuKernelTiles(payload)) {
           const name = `cpu_simd_threads_oc4x${tile}`;
           cpuSimdThreads = timedCpuRun(name, run, () =>
-            processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 2, tile)
+            processResnetCpuTiled(engine, cppVec, payload.width, payload.height, payload.channels, 2, tile, payload.cpuProfileLogging)
           );
           cpuSimdThreadsRunsByTile.get(tile).push(cpuSimdThreads);
         }

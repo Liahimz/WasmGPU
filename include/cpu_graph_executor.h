@@ -13,6 +13,8 @@ struct CpuGraphOptions {
     bool use_simd = false;
     bool use_threads = false;
     cpu_conv::ConvTileMode conv_tile_mode = cpu_conv::ConvTileMode::Oc4x4;
+    bool use_c4_layout = false;
+    bool log_layers = false;
 };
 
 class CpuGraphExecutor {

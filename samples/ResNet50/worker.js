@@ -101,7 +101,10 @@ function cpuKernelTiles(cpuKernelMode) {
   return tile === 8 ? [8] : [4];
 }
 
-function processResnetCpuTiled(cppVec, width, height, channels, mode, tile) {
+function processResnetCpuTiled(cppVec, width, height, channels, mode, tile, logLayers) {
+  if (typeof engineInstance.processResnetCpuProfiled === "function") {
+    return engineInstance.processResnetCpuProfiled(cppVec, width, height, channels, mode, tile, Boolean(logLayers));
+  }
   if (typeof engineInstance.processResnetCpuTiled === "function") {
     return engineInstance.processResnetCpuTiled(cppVec, width, height, channels, mode, tile);
   }
@@ -125,6 +128,7 @@ onmessage = async function(msg) {
     const repetitions = Math.max(1, Math.min(20, msg.data.repetitions || 1));
     const cpuMode = msg.data.cpuMode || "fast";
     const kernelTiles = cpuKernelTiles(msg.data.cpuKernelMode || "4");
+    const cpuProfileLogging = Boolean(msg.data.cpuProfileLogging);
 
     const cppVec = new moduleObject.Uint8Vector();
     for (let i = 0; i < arr.length; ++i) {
@@ -167,15 +171,19 @@ onmessage = async function(msg) {
       let cpuSimdThreads = null;
       const primaryTile = kernelTiles[0];
       if (cpuMode === "full") {
-        cpuScalar = timedCpuRun("cpu_scalar", run, () => processResnetCpuTiled(cppVec, width, height, channels, 0, primaryTile));
-        cpuSimd = timedCpuRun("cpu_simd", run, () => processResnetCpuTiled(cppVec, width, height, channels, 1, primaryTile));
+        cpuScalar = timedCpuRun("cpu_scalar", run, () =>
+          processResnetCpuTiled(cppVec, width, height, channels, 0, primaryTile, cpuProfileLogging)
+        );
+        cpuSimd = timedCpuRun("cpu_simd", run, () =>
+          processResnetCpuTiled(cppVec, width, height, channels, 1, primaryTile, cpuProfileLogging)
+        );
         cpuScalarRuns.push(cpuScalar);
         cpuSimdRuns.push(cpuSimd);
       }
       if (cpuMode !== "none") {
         for (const tile of kernelTiles) {
           cpuSimdThreads = timedCpuRun(`cpu_simd_threads_oc4x${tile}`, run, () =>
-            processResnetCpuTiled(cppVec, width, height, channels, 2, tile)
+            processResnetCpuTiled(cppVec, width, height, channels, 2, tile, cpuProfileLogging)
           );
           cpuSimdThreadsRunsByTile.get(tile).push(cpuSimdThreads);
         }
