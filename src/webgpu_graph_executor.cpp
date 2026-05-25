@@ -45,6 +45,7 @@ struct WebGpuGraphExecutor::Impl {
         uint32_t dispatch_x = 1;
         uint32_t dispatch_y = 1;
         uint32_t dispatch_z = 1;
+        std::string conv_class;
         std::string kernel_variant;
         uint64_t estimated_macs = 0;
     };
@@ -183,7 +184,8 @@ void logGraphProfileLayers(
                   << " gpu=" << gpu_ms
                   << "ms";
         if (layer.type == LayerType::Conv2D) {
-            std::cout << " conv_class=" << layer.kernel_variant
+            std::cout << " conv_class=" << layer.conv_class
+                      << " kernel_variant=" << layer.kernel_variant
                       << " macs=" << layer.estimated_macs;
         }
         std::cout << std::endl;
@@ -742,7 +744,8 @@ bool WebGpuGraphExecutor::configure(const ModelDesc& model) {
         if (impl_->profiling_requested && layer.type == LayerType::Conv2D) {
             std::cout << "[timing] gpu_graph_conv_class"
                       << " name=" << layer.name
-                      << " class=" << shader.kernel_variant
+                      << " class=" << conv2dShapeClassName(shader.conv_class)
+                      << " kernel_variant=" << shader.kernel_variant
                       << " input=" << layer.input_shape.toString()
                       << " output=" << layer.output_shape.toString()
                       << " channels=" << layer.input_shape.dims[0] << "x" << layer.output_shape.dims[0]
@@ -863,6 +866,7 @@ bool WebGpuGraphExecutor::prepare() {
         layer_profile.dispatch_x = gpu_layer.shader.dispatch_x;
         layer_profile.dispatch_y = gpu_layer.shader.dispatch_y;
         layer_profile.dispatch_z = gpu_layer.shader.dispatch_z;
+        layer_profile.conv_class = conv2dShapeClassName(gpu_layer.shader.conv_class);
         layer_profile.kernel_variant = gpu_layer.shader.kernel_variant;
         layer_profile.estimated_macs = gpu_layer.shader.estimated_macs;
 
@@ -1048,6 +1052,7 @@ bool WebGpuGraphExecutor::prepare() {
         layer_profile.dispatch_x = gpu_layer.shader.dispatch_x;
         layer_profile.dispatch_y = gpu_layer.shader.dispatch_y;
         layer_profile.dispatch_z = gpu_layer.shader.dispatch_z;
+        layer_profile.conv_class = conv2dShapeClassName(gpu_layer.shader.conv_class);
         layer_profile.kernel_variant = gpu_layer.shader.kernel_variant;
         layer_profile.estimated_macs = gpu_layer.shader.estimated_macs;
 

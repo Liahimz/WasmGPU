@@ -16,11 +16,13 @@ bool isConv2d(const LayerDesc& layer) {
         && layer.output_shape.dims.size() == 3;
 }
 
-GeneratedWgsl generateConv2d(const LayerDesc& layer) {
+GeneratedWgsl makeConv2dShaderMetadata(const LayerDesc& layer) {
     GeneratedWgsl shader;
     shader.label = layer.name + "_wgsl";
     shader.conv_class = classifyConv2dShape(layer);
-    shader.kernel_variant = conv2dShapeClassName(shader.conv_class);
+    shader.kernel_variant = shader.conv_class == Conv2dShapeClass::NotConv2D
+        ? "not_conv2d"
+        : "generic_conv2d";
     shader.estimated_macs = estimateConv2dMacs(layer);
     shader.workgroup_x = 8;
     shader.workgroup_y = 8;
@@ -28,6 +30,47 @@ GeneratedWgsl generateConv2d(const LayerDesc& layer) {
     shader.dispatch_x = ceilDiv(layer.output_shape.dims[2], shader.workgroup_x);
     shader.dispatch_y = ceilDiv(layer.output_shape.dims[1], shader.workgroup_y);
     shader.dispatch_z = layer.output_shape.dims[0];
+    return shader;
+}
+
+GeneratedWgsl generateConv2d1x1Stride1(const LayerDesc& layer) {
+    GeneratedWgsl shader = makeConv2dShaderMetadata(layer);
+    shader.kernel_variant = "bottleneck_1x1_projection_specialized";
+
+    std::ostringstream wgsl;
+    wgsl
+        << "@group(0) @binding(0) var<storage, read> input_tensor: array<f32>;\n"
+        << "@group(0) @binding(1) var<storage, read> weights: array<f32>;\n"
+        << "@group(0) @binding(2) var<storage, read> bias: array<f32>;\n"
+        << "@group(0) @binding(3) var<storage, read_write> output_tensor: array<f32>;\n\n"
+        << "const IN_C: u32 = " << layer.input_shape.dims[0] << "u;\n"
+        << "const IN_H: u32 = " << layer.input_shape.dims[1] << "u;\n"
+        << "const IN_W: u32 = " << layer.input_shape.dims[2] << "u;\n"
+        << "const OUT_C: u32 = " << layer.output_shape.dims[0] << "u;\n"
+        << "const OUT_H: u32 = " << layer.output_shape.dims[1] << "u;\n"
+        << "const OUT_W: u32 = " << layer.output_shape.dims[2] << "u;\n\n"
+        << "@compute @workgroup_size(" << shader.workgroup_x << ", " << shader.workgroup_y << ", 1)\n"
+        << "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        << "    let ox = id.x;\n"
+        << "    let oy = id.y;\n"
+        << "    let oc = id.z;\n"
+        << "    if (ox >= OUT_W || oy >= OUT_H || oc >= OUT_C) { return; }\n"
+        << "    let spatial_index = oy * IN_W + ox;\n"
+        << "    var sum = bias[oc];\n"
+        << "    let weight_base = oc * IN_C;\n"
+        << "    for (var ic = 0u; ic < IN_C; ic = ic + 1u) {\n"
+        << "        let input_index = ic * IN_H * IN_W + spatial_index;\n"
+        << "        sum = sum + input_tensor[input_index] * weights[weight_base + ic];\n"
+        << "    }\n"
+        << "    let output_index = oc * OUT_H * OUT_W + oy * OUT_W + ox;\n"
+        << "    output_tensor[output_index] = sum;\n"
+        << "}\n";
+    shader.source = wgsl.str();
+    return shader;
+}
+
+GeneratedWgsl generateConv2dGeneric(const LayerDesc& layer) {
+    GeneratedWgsl shader = makeConv2dShaderMetadata(layer);
 
     std::ostringstream wgsl;
     wgsl
@@ -72,6 +115,13 @@ GeneratedWgsl generateConv2d(const LayerDesc& layer) {
         << "}\n";
     shader.source = wgsl.str();
     return shader;
+}
+
+GeneratedWgsl generateConv2d(const LayerDesc& layer) {
+    if (classifyConv2dShape(layer) == Conv2dShapeClass::Bottleneck1x1Projection) {
+        return generateConv2d1x1Stride1(layer);
+    }
+    return generateConv2dGeneric(layer);
 }
 
 GeneratedWgsl generateRelu(const LayerDesc& layer) {
