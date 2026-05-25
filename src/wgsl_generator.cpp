@@ -69,6 +69,65 @@ GeneratedWgsl generateConv2d1x1Stride1(const LayerDesc& layer) {
     return shader;
 }
 
+GeneratedWgsl generateConv2d3x3Stride1Pad1(const LayerDesc& layer) {
+    GeneratedWgsl shader = makeConv2dShaderMetadata(layer);
+    shader.kernel_variant = "conv_3x3_stride1_pad1_specialized";
+
+    std::ostringstream wgsl;
+    wgsl
+        << "@group(0) @binding(0) var<storage, read> input_tensor: array<f32>;\n"
+        << "@group(0) @binding(1) var<storage, read> weights: array<f32>;\n"
+        << "@group(0) @binding(2) var<storage, read> bias: array<f32>;\n"
+        << "@group(0) @binding(3) var<storage, read_write> output_tensor: array<f32>;\n\n"
+        << "const IN_C: u32 = " << layer.input_shape.dims[0] << "u;\n"
+        << "const IN_H: u32 = " << layer.input_shape.dims[1] << "u;\n"
+        << "const IN_W: u32 = " << layer.input_shape.dims[2] << "u;\n"
+        << "const OUT_C: u32 = " << layer.output_shape.dims[0] << "u;\n"
+        << "const OUT_H: u32 = " << layer.output_shape.dims[1] << "u;\n"
+        << "const OUT_W: u32 = " << layer.output_shape.dims[2] << "u;\n\n"
+        << "@compute @workgroup_size(" << shader.workgroup_x << ", " << shader.workgroup_y << ", 1)\n"
+        << "fn main(@builtin(global_invocation_id) id: vec3<u32>) {\n"
+        << "    let ox = id.x;\n"
+        << "    let oy = id.y;\n"
+        << "    let oc = id.z;\n"
+        << "    if (ox >= OUT_W || oy >= OUT_H || oc >= OUT_C) { return; }\n"
+        << "    var sum = bias[oc];\n"
+        << "    let interior = ox > 0u && oy > 0u && (ox + 1u) < IN_W && (oy + 1u) < IN_H;\n"
+        << "    let plane = IN_H * IN_W;\n"
+        << "    for (var ic = 0u; ic < IN_C; ic = ic + 1u) {\n"
+        << "        let input_base = ic * plane;\n"
+        << "        let weight_base = oc * IN_C * 9u + ic * 9u;\n"
+        << "        if (interior) {\n"
+        << "            let center = input_base + oy * IN_W + ox;\n"
+        << "            sum = sum + input_tensor[center - IN_W - 1u] * weights[weight_base + 0u];\n"
+        << "            sum = sum + input_tensor[center - IN_W] * weights[weight_base + 1u];\n"
+        << "            sum = sum + input_tensor[center - IN_W + 1u] * weights[weight_base + 2u];\n"
+        << "            sum = sum + input_tensor[center - 1u] * weights[weight_base + 3u];\n"
+        << "            sum = sum + input_tensor[center] * weights[weight_base + 4u];\n"
+        << "            sum = sum + input_tensor[center + 1u] * weights[weight_base + 5u];\n"
+        << "            sum = sum + input_tensor[center + IN_W - 1u] * weights[weight_base + 6u];\n"
+        << "            sum = sum + input_tensor[center + IN_W] * weights[weight_base + 7u];\n"
+        << "            sum = sum + input_tensor[center + IN_W + 1u] * weights[weight_base + 8u];\n"
+        << "        } else {\n"
+        << "            let center = input_base + oy * IN_W + ox;\n"
+        << "            if (oy > 0u && ox > 0u) { sum = sum + input_tensor[center - IN_W - 1u] * weights[weight_base + 0u]; }\n"
+        << "            if (oy > 0u) { sum = sum + input_tensor[center - IN_W] * weights[weight_base + 1u]; }\n"
+        << "            if (oy > 0u && (ox + 1u) < IN_W) { sum = sum + input_tensor[center - IN_W + 1u] * weights[weight_base + 2u]; }\n"
+        << "            if (ox > 0u) { sum = sum + input_tensor[center - 1u] * weights[weight_base + 3u]; }\n"
+        << "            sum = sum + input_tensor[center] * weights[weight_base + 4u];\n"
+        << "            if ((ox + 1u) < IN_W) { sum = sum + input_tensor[center + 1u] * weights[weight_base + 5u]; }\n"
+        << "            if ((oy + 1u) < IN_H && ox > 0u) { sum = sum + input_tensor[center + IN_W - 1u] * weights[weight_base + 6u]; }\n"
+        << "            if ((oy + 1u) < IN_H) { sum = sum + input_tensor[center + IN_W] * weights[weight_base + 7u]; }\n"
+        << "            if ((oy + 1u) < IN_H && (ox + 1u) < IN_W) { sum = sum + input_tensor[center + IN_W + 1u] * weights[weight_base + 8u]; }\n"
+        << "        }\n"
+        << "    }\n"
+        << "    let output_index = oc * OUT_H * OUT_W + oy * OUT_W + ox;\n"
+        << "    output_tensor[output_index] = sum;\n"
+        << "}\n";
+    shader.source = wgsl.str();
+    return shader;
+}
+
 GeneratedWgsl generateConv2dGeneric(const LayerDesc& layer) {
     GeneratedWgsl shader = makeConv2dShaderMetadata(layer);
 
@@ -120,6 +179,9 @@ GeneratedWgsl generateConv2dGeneric(const LayerDesc& layer) {
 GeneratedWgsl generateConv2d(const LayerDesc& layer) {
     if (classifyConv2dShape(layer) == Conv2dShapeClass::Bottleneck1x1Projection) {
         return generateConv2d1x1Stride1(layer);
+    }
+    if (classifyConv2dShape(layer) == Conv2dShapeClass::Conv3x3Stride1Pad1) {
+        return generateConv2d3x3Stride1Pad1(layer);
     }
     return generateConv2dGeneric(layer);
 }
