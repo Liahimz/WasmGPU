@@ -31,6 +31,8 @@ public:
     int latestPrediction() const;
     const std::vector<float>& latestOutput() const;
     const char* latestBackend() const;
+    void setGraphProfilingEnabled(bool enabled);
+    bool graphProfilingEnabled() const;
 
 private:
     const network::TinyLenetWeights* weights_ = nullptr;

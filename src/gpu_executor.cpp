@@ -573,6 +573,23 @@ const char* GpuExecutor::latestBackend() const {
     return latest_backend_;
 }
 
+void GpuExecutor::setGraphProfilingEnabled(bool enabled) {
+    graph_.setProfilingEnabled(enabled);
+    if (!model_) {
+        return;
+    }
+    network_ready_ = false;
+    if (!graph_.configure(*model_)) {
+        std::cerr << "Failed to configure WebGPU graph executor: " << graph_.error() << std::endl;
+        return;
+    }
+    createNetworkResources();
+}
+
+bool GpuExecutor::graphProfilingEnabled() const {
+    return graph_.profilingEnabled();
+}
+
 void GpuExecutor::requestWebGpuDevice() {
     if (webgpu_requested_) {
         return;

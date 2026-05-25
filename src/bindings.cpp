@@ -57,6 +57,8 @@ EMSCRIPTEN_BINDINGS(my_dummy_engine) {
         .function("latestPrediction", &WasmGpuEngine::latestPrediction)
         .function("latestClassLabel", &WasmGpuEngine::latestClassLabel)
         .function("latestTopK", &WasmGpuEngine::latestTopK)
+        .function("setGpuExtendedLogs", &WasmGpuEngine::setGpuExtendedLogs)
+        .function("gpuExtendedLogs", &WasmGpuEngine::gpuExtendedLogs)
         ;
 #else
     class_<GpuEngine>("GpuEngine")

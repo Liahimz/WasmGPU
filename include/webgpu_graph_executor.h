@@ -38,6 +38,8 @@ public:
 
     bool ready() const;
     bool prepare();
+    void setProfilingEnabled(bool enabled);
+    bool profilingEnabled() const;
     int inferClassBytes(const std::vector<uint8_t>& input);
     int inferClass(const std::vector<float>& input);
     int inferClassBytesAsync(const std::vector<uint8_t>& input);

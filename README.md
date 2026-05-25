@@ -262,6 +262,14 @@ GPU detail timing:
 [timing] synthetic_gpu_large_detail input_generation=...ms upload=...ms encode_submit=...ms sync_readback=...ms gpu_conv=...ms gpu_linear_partial=...ms gpu_linear_reduce=...ms gpu_total=...ms
 ```
 
+Generic GPU graph profiling is opt-in so normal graph inference does not pay for timestamp readbacks. Enable it with `WASM_GPU_GRAPH_PROFILE=1` before constructing `WebGpuGraphExecutor`, or call `setProfilingEnabled(true)` from C++. When timestamp queries are available, graph profiling adds one summary row and one row per generated GPU pass:
+
+```text
+[timing] gpu_graph_detail upload=...ms encode_submit=...ms readback=...ms postprocess=...ms total_inference=...ms prediction=...
+[timing] gpu_graph_layer index=... name=... type=... input=... output=... dispatch=... gpu=...ms
+[timing] gpu_graph_layer_total layers=... gpu_total=...ms
+```
+
 Meaning:
 
 - `input_convert`: CPU-side conversion from 8-bit preprocessed pixels to float input for the tiny network.

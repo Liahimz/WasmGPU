@@ -422,6 +422,14 @@ std::string WasmGpuEngine::latestTopK(int count) const {
     return topKText(gpu_.latestOutput(), count);
 }
 
+void WasmGpuEngine::setGpuExtendedLogs(bool enabled) {
+    gpu_.setGraphProfilingEnabled(enabled);
+}
+
+bool WasmGpuEngine::gpuExtendedLogs() const {
+    return gpu_.graphProfilingEnabled();
+}
+
 int WasmGpuEngine::runNetwork(const std::vector<uint8_t>& image) {
     if (!model_.valid() && !weights_.valid()) {
         return -1;

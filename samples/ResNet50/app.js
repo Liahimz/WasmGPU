@@ -5,6 +5,7 @@ const benchmarkRunsInput = document.getElementById("benchmark_runs");
 const cpuBenchmarkModeSelect = document.getElementById("cpu_benchmark_mode");
 const cpuKernelModeSelect = document.getElementById("cpu_kernel_mode");
 const cpuProfileLoggingInput = document.getElementById("cpu_profile_logging");
+const gpuExtendedLogsInput = document.getElementById("gpu_extended_logs");
 let selectedFile = null;
 let worker = null;
 let mainRuntimePromise = null;
@@ -95,6 +96,7 @@ function loadImagePayload(file) {
           cpuMode: cpuBenchmarkModeSelect ? cpuBenchmarkModeSelect.value : "fast",
           cpuKernelMode: cpuKernelModeSelect ? cpuKernelModeSelect.value : "4",
           cpuProfileLogging: cpuProfileLoggingInput ? cpuProfileLoggingInput.checked : false,
+          gpuExtendedLogs: gpuExtendedLogsInput ? gpuExtendedLogsInput.checked : false,
         });
       };
       img.src = event.target.result;
@@ -265,8 +267,20 @@ function processResnetCpuTiled(engine, cppVec, width, height, channels, mode, ti
   return engine.processResnetCpu(cppVec, width, height, channels, mode);
 }
 
+async function setGpuExtendedLogs(engine, enabled) {
+  if (typeof engine.setGpuExtendedLogs !== "function") {
+    return;
+  }
+  if (typeof engine.gpuExtendedLogs === "function" && engine.gpuExtendedLogs() === Boolean(enabled)) {
+    return;
+  }
+  engine.setGpuExtendedLogs(Boolean(enabled));
+  await waitForWebGpuReady(engine);
+}
+
 async function runOnMainThread(payload) {
   const { Module, engine } = await getMainRuntime();
+  await setGpuExtendedLogs(engine, payload.gpuExtendedLogs);
   const cppVec = new Module.Uint8Vector();
   for (let i = 0; i < payload.imageData.length; ++i) {
     cppVec.push_back(payload.imageData[i]);
@@ -357,6 +371,7 @@ async function runOnMainThread(payload) {
       width: preprocessedWidth,
       height: preprocessedHeight,
       webgpuReady: engine.webgpuReady(),
+      gpuExtendedLogs: typeof engine.gpuExtendedLogs === "function" ? engine.gpuExtendedLogs() : false,
       benchmarkStats: [
         summarizeRuns("gpu", gpuRuns),
         cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,
@@ -460,6 +475,7 @@ function appendBenchmarkTable(rows) {
 function renderResult(data) {
   outputDiv.innerHTML = "";
   appendText("C++ WebGPU ready", data.webgpuReady);
+  appendText("GPU extended logs", data.gpuExtendedLogs ? "on" : "off");
   appendText("GPU prediction", predictionText(data.prediction, data.classLabel));
   appendText("GPU network", data.gpuBackend);
   if (data.cpuPredictions) {

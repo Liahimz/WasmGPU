@@ -36,6 +36,17 @@ async function waitForWebGpuReady() {
   }
 }
 
+async function setGpuExtendedLogs(enabled) {
+  if (typeof engineInstance.setGpuExtendedLogs !== "function") {
+    return;
+  }
+  if (typeof engineInstance.gpuExtendedLogs === "function" && engineInstance.gpuExtendedLogs() === Boolean(enabled)) {
+    return;
+  }
+  engineInstance.setGpuExtendedLogs(Boolean(enabled));
+  await waitForWebGpuReady();
+}
+
 function summarizeRuns(name, runs) {
   const sorted = [...runs].sort((a, b) => a.ms - b.ms);
   const median = sorted[Math.floor(sorted.length / 2)];
@@ -129,6 +140,8 @@ onmessage = async function(msg) {
     const cpuMode = msg.data.cpuMode || "fast";
     const kernelTiles = cpuKernelTiles(msg.data.cpuKernelMode || "4");
     const cpuProfileLogging = Boolean(msg.data.cpuProfileLogging);
+    const gpuExtendedLogs = Boolean(msg.data.gpuExtendedLogs);
+    await setGpuExtendedLogs(gpuExtendedLogs);
 
     const cppVec = new moduleObject.Uint8Vector();
     for (let i = 0; i < arr.length; ++i) {
@@ -214,6 +227,7 @@ onmessage = async function(msg) {
       width: preprocessedWidth,
       height: preprocessedHeight,
       webgpuReady: engineInstance.webgpuReady(),
+      gpuExtendedLogs: typeof engineInstance.gpuExtendedLogs === "function" ? engineInstance.gpuExtendedLogs() : false,
       benchmarkStats: [
         summarizeRuns("gpu", gpuRuns),
         cpuScalarRuns.length ? summarizeRuns("cpu_scalar", cpuScalarRuns) : null,

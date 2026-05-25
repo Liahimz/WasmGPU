@@ -242,6 +242,23 @@ const char* GpuExecutor::latestBackend() const {
     return latest_backend_;
 }
 
+void GpuExecutor::setGraphProfilingEnabled(bool enabled) {
+    graph_.setProfilingEnabled(enabled);
+    if (!model_) {
+        return;
+    }
+    network_ready_ = false;
+    if (!graph_.configure(*model_)) {
+        std::cerr << "Failed to configure Dawn WebGPU graph executor: " << graph_.error() << std::endl;
+        return;
+    }
+    createNetworkResources();
+}
+
+bool GpuExecutor::graphProfilingEnabled() const {
+    return graph_.profilingEnabled();
+}
+
 WGPUBuffer GpuExecutor::createBuffer(std::size_t size, WGPUBufferUsage usage) const {
     WGPUBufferDescriptor desc = WGPU_BUFFER_DESCRIPTOR_INIT;
     desc.size = size;
@@ -1013,5 +1030,7 @@ const std::vector<float>& GpuExecutor::latestOutput() const {
     return empty;
 }
 const char* GpuExecutor::latestBackend() const { return "unavailable"; }
+void GpuExecutor::setGraphProfilingEnabled(bool) {}
+bool GpuExecutor::graphProfilingEnabled() const { return false; }
 
 #endif

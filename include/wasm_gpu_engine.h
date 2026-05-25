@@ -43,6 +43,8 @@ public:
     int latestPrediction() const;
     std::string latestClassLabel() const;
     std::string latestTopK(int count) const;
+    void setGpuExtendedLogs(bool enabled);
+    bool gpuExtendedLogs() const;
 
 private:
   int target_size = 0;
