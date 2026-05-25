@@ -1,5 +1,6 @@
 #include "wgsl_generator.h"
 
+#include <cstdint>
 #include <sstream>
 
 namespace network {
@@ -9,9 +10,18 @@ uint32_t ceilDiv(uint32_t value, uint32_t divisor) {
     return (value + divisor - 1) / divisor;
 }
 
+bool isConv2d(const LayerDesc& layer) {
+    return layer.type == LayerType::Conv2D
+        && layer.input_shape.dims.size() == 3
+        && layer.output_shape.dims.size() == 3;
+}
+
 GeneratedWgsl generateConv2d(const LayerDesc& layer) {
     GeneratedWgsl shader;
     shader.label = layer.name + "_wgsl";
+    shader.conv_class = classifyConv2dShape(layer);
+    shader.kernel_variant = conv2dShapeClassName(shader.conv_class);
+    shader.estimated_macs = estimateConv2dMacs(layer);
     shader.workgroup_x = 8;
     shader.workgroup_y = 8;
     shader.workgroup_z = 1;
@@ -214,6 +224,68 @@ GeneratedWgsl generateGlobalAvgPool2d(const LayerDesc& layer) {
 }
 
 } // namespace
+
+Conv2dShapeClass classifyConv2dShape(const LayerDesc& layer) {
+    if (!isConv2d(layer)) {
+        return Conv2dShapeClass::NotConv2D;
+    }
+
+    const bool pad0 = layer.padding_y == 0 && layer.padding_x == 0;
+    const bool pad1 = layer.padding_y == 1 && layer.padding_x == 1;
+    const bool pad3 = layer.padding_y == 3 && layer.padding_x == 3;
+    const bool stride1 = layer.stride_y == 1 && layer.stride_x == 1;
+    const bool stride2 = layer.stride_y == 2 && layer.stride_x == 2;
+    const bool kernel1x1 = layer.kernel_y == 1 && layer.kernel_x == 1;
+    const bool kernel3x3 = layer.kernel_y == 3 && layer.kernel_x == 3;
+    const bool kernel7x7 = layer.kernel_y == 7 && layer.kernel_x == 7;
+
+    if (kernel7x7 && stride2 && pad3) {
+        return Conv2dShapeClass::Stem7x7Stride2;
+    }
+    if (kernel1x1 && stride2 && pad0) {
+        return Conv2dShapeClass::Downsample1x1Stride2;
+    }
+    if (kernel1x1 && stride1 && pad0) {
+        return Conv2dShapeClass::Bottleneck1x1Projection;
+    }
+    if (kernel3x3 && stride1 && pad1) {
+        return Conv2dShapeClass::Conv3x3Stride1Pad1;
+    }
+    if (kernel3x3 && stride2 && pad1) {
+        return Conv2dShapeClass::Conv3x3Stride2Pad1;
+    }
+    return Conv2dShapeClass::GenericFallback;
+}
+
+const char* conv2dShapeClassName(Conv2dShapeClass shape_class) {
+    switch (shape_class) {
+        case Conv2dShapeClass::NotConv2D:
+            return "not_conv2d";
+        case Conv2dShapeClass::Stem7x7Stride2:
+            return "stem_7x7_stride2";
+        case Conv2dShapeClass::Bottleneck1x1Projection:
+            return "bottleneck_1x1_projection";
+        case Conv2dShapeClass::Downsample1x1Stride2:
+            return "downsample_1x1_stride2";
+        case Conv2dShapeClass::Conv3x3Stride1Pad1:
+            return "conv_3x3_stride1_pad1";
+        case Conv2dShapeClass::Conv3x3Stride2Pad1:
+            return "conv_3x3_stride2_pad1";
+        case Conv2dShapeClass::GenericFallback:
+            return "generic_fallback";
+    }
+    return "generic_fallback";
+}
+
+uint64_t estimateConv2dMacs(const LayerDesc& layer) {
+    if (!isConv2d(layer)) {
+        return 0;
+    }
+    return static_cast<uint64_t>(layer.output_shape.elementCount())
+        * static_cast<uint64_t>(layer.input_shape.dims[0])
+        * static_cast<uint64_t>(layer.kernel_y)
+        * static_cast<uint64_t>(layer.kernel_x);
+}
 
 GeneratedWgsl generateLayerWgsl(const LayerDesc& layer) {
     switch (layer.type) {
