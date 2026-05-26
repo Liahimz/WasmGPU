@@ -1,0 +1,11 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bench:node": "node benchmarks/bench_node_onnx_cpu.mjs"
+  },
+  "dependencies": {
+    "onnxruntime-node": "^1.22.0",
+    "onnxruntime-web": "^1.22.0"
+  }
+}

@@ -1,0 +1,19 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>ResNet50 ONNX WebGPU Benchmark</title>
+<style>
+  body { font: 14px/1.4 system-ui, sans-serif; margin: 24px; max-width: 920px; }
+  button { padding: 6px 10px; }
+  pre { background: #f5f5f5; padding: 12px; overflow: auto; }
+  table { border-collapse: collapse; margin-top: 16px; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid #ddd; text-align: right; }
+  th:first-child, td:first-child { text-align: left; }
+</style>
+<h1>ResNet50 ONNX WebGPU Benchmark</h1>
+<p>Serve the repo root, then open this page. It expects <code>node_modules/onnxruntime-web</code> and <code>benchmarks/artifacts/resnet50_imagenet.onnx</code>.</p>
+<label>Runs <input id="runs" type="number" min="1" max="200" value="20"></label>
+<label>Warmup <input id="warmup" type="number" min="0" max="50" value="5"></label>
+<button id="start">Run</button>
+<div id="status"></div>
+<pre id="output"></pre>
+<script type="module" src="./onnx_webgpu_bench.js"></script>
